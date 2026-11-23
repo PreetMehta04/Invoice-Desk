@@ -49,6 +49,10 @@ const statusIcon = (s) => ({ pass: I.check, warn: I.warn, fail: I.x, info: I.inf
 
 async function api(path, opts = {}) {
   const res = await fetch(path, opts);
+  if (res.status === 401) {
+    showAuth();
+    throw new Error("Session expired — please sign in again.");
+  }
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail || msg; } catch (_) { /* not json */ }
@@ -664,8 +668,107 @@ function renderHow() {
     </div></div>`;
 }
 
+// ------------------------------------------------------------------------------------------- auth
+let currentUser = null;
+
+function showAuth() {
+  $("#auth-page").style.display = "";
+  $("#app-shell").style.display = "none";
+  renderLogin();
+}
+
+function showApp(user) {
+  currentUser = user;
+  $("#auth-page").style.display = "none";
+  $("#app-shell").style.display = "";
+  const menu = $("#user-menu");
+  if (menu) {
+    const initials = (user.name || "U").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+    menu.innerHTML = `<div class="user-info"><span class="user-avatar">${esc(initials)}</span><span class="user-name">${esc(user.name)}</span></div>` +
+      `<button class="btn sm" onclick="doLogout()">Sign out</button>`;
+  }
+}
+
+function renderLogin() {
+  $("#auth-form").innerHTML = `
+    <h2>Sign in</h2>
+    <p class="auth-sub">Enter your credentials to access Invoice Desk.</p>
+    <form id="login-form" autocomplete="on">
+      <label>Email<input type="email" name="email" required autofocus autocomplete="email"></label>
+      <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+      <div class="auth-error" id="auth-error"></div>
+      <button class="btn primary auth-btn" type="submit">Sign in</button>
+    </form>
+    <p class="auth-switch">Don't have an account? <a href="#" onclick="renderSignup();return false">Create account</a></p>`;
+  $("#login-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
+    btn.textContent = "Signing in…";
+    $("#auth-error").textContent = "";
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: f.get("email"), password: f.get("password") }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Login failed");
+      showApp(data.user);
+      bootApp();
+    } catch (err) {
+      $("#auth-error").textContent = err.message;
+      btn.disabled = false;
+      btn.textContent = "Sign in";
+    }
+  };
+}
+
+function renderSignup() {
+  $("#auth-form").innerHTML = `
+    <h2>Create account</h2>
+    <p class="auth-sub">Set up your Invoice Desk account.</p>
+    <form id="signup-form" autocomplete="on">
+      <label>Full name<input type="text" name="name" required autofocus autocomplete="name"></label>
+      <label>Email<input type="email" name="email" required autocomplete="email"></label>
+      <label>Password<input type="password" name="password" required minlength="6" autocomplete="new-password"></label>
+      <label>Confirm password<input type="password" name="confirm" required minlength="6" autocomplete="new-password"></label>
+      <div class="auth-error" id="auth-error"></div>
+      <button class="btn primary auth-btn" type="submit">Create account</button>
+    </form>
+    <p class="auth-switch">Already have an account? <a href="#" onclick="renderLogin();return false">Sign in</a></p>`;
+  $("#signup-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
+    btn.textContent = "Creating account…";
+    $("#auth-error").textContent = "";
+    try {
+      const res = await fetch("/api/auth/signup", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: f.get("name"), email: f.get("email"), password: f.get("password"), confirm: f.get("confirm") }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Sign-up failed");
+      showApp(data.user);
+      bootApp();
+    } catch (err) {
+      $("#auth-error").textContent = err.message;
+      btn.disabled = false;
+      btn.textContent = "Create account";
+    }
+  };
+}
+
+async function doLogout() {
+  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (_) {}
+  currentUser = null;
+  showAuth();
+}
+
 // ------------------------------------------------------------------------------------------- boot
-(async function boot() {
+async function bootApp() {
   try {
     CONFIG = await api("/api/config");
     $("#engine-badge").innerHTML = `<span class="engine-dot ${CONFIG.ai_enabled ? "" : "local"}"></span>Extraction engine<strong>${esc(CONFIG.engine)}</strong>`;
@@ -676,4 +779,18 @@ function renderHow() {
   refreshNav();
   setInterval(refreshNav, 8000);
   route();
+}
+
+(async function boot() {
+  // Check if already logged in
+  try {
+    const res = await fetch("/api/auth/me");
+    if (res.ok) {
+      const data = await res.json();
+      showApp(data.user);
+      bootApp();
+      return;
+    }
+  } catch (_) {}
+  showAuth();
 })();

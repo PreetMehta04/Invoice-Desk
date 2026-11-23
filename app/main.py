@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db, events, pipeline
+from . import auth as user_auth
 
 app = FastAPI(title="Invoice Desk — AI invoice processing", version="1.0")
 MAX_BYTES = 15 * 1024 * 1024
@@ -45,6 +46,98 @@ def _watch_inbox():
         except Exception as e:  # keep watching
             print("inbox watcher:", e)
         time.sleep(2)
+
+
+# ------------------------------------------------------------------------------------------------ auth
+SESSION_COOKIE = "invoice_desk_session"
+
+# Paths that don't require authentication
+_PUBLIC_PREFIXES = ("/api/auth/", "/api/health", "/static/", "/favicon.ico")
+
+def _get_session_token(request: Request) -> str | None:
+    return request.cookies.get(SESSION_COOKIE)
+
+
+def _require_user(request: Request) -> dict:
+    """Return the current user or raise 401."""
+    user = user_auth.validate_session(_get_session_token(request))
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    return user
+
+
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Protect API routes. Public paths and the root page are allowed through.
+    Unauthenticated API calls get 401. The UI handles the redirect to login."""
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        # Static files, auth endpoints, health check — always public
+        if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+            return await call_next(request)
+        # The root page (/) — always serve (the JS decides login vs app)
+        if path == "/":
+            return await call_next(request)
+        # All other /api/ routes require authentication
+        if path.startswith("/api/"):
+            user = user_auth.validate_session(_get_session_token(request))
+            if not user:
+                return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+            request.state.user = user
+        return await call_next(request)
+
+app.add_middleware(AuthMiddleware)
+
+
+@app.post("/api/auth/signup")
+async def signup(request: Request):
+    body = await request.json()
+    err = user_auth.validate_signup(
+        body.get("name", ""), body.get("email", ""),
+        body.get("password", ""), body.get("confirm", ""),
+    )
+    if err:
+        raise HTTPException(400, err)
+    user = user_auth.create_user(body["name"], body["email"], body["password"])
+    token = user_auth.create_session(user["id"])
+    resp = JSONResponse({"ok": True, "user": user})
+    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=7 * 86400)
+    return resp
+
+
+@app.post("/api/auth/login")
+async def login(request: Request):
+    body = await request.json()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password", "")
+    if not email or not password:
+        raise HTTPException(400, "Email and password are required.")
+    user = user_auth.get_user_by_email(email)
+    if not user or not user_auth.verify_password(password, user["pw_hash"]):
+        raise HTTPException(401, "Invalid email or password.")
+    token = user_auth.create_session(user["id"])
+    resp = JSONResponse({"ok": True, "user": {"id": user["id"], "name": user["name"], "email": user["email"]}})
+    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=7 * 86400)
+    return resp
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    token = _get_session_token(request)
+    if token:
+        user_auth.delete_session(token)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
+
+
+@app.get("/api/auth/me")
+async def me(request: Request):
+    user = user_auth.validate_session(_get_session_token(request))
+    if not user:
+        raise HTTPException(401, "Not authenticated")
+    return {"user": user}
 
 
 # ------------------------------------------------------------------------------------------------ meta
