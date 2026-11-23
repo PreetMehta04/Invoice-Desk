@@ -83,6 +83,31 @@ code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; 
 .btn.ok { background: var(--ok); border-color: var(--ok); color: #fff; }
 .btn.bad { background: var(--surface); border-color: #E8B4AF; color: var(--bad); }
 .btn.bad:hover { background: var(--bad-soft); }
+.btn-icon-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+  vertical-align: middle;
+}
+.btn-icon-del:hover {
+  background: var(--bad-soft);
+  color: var(--bad);
+  border-color: #E8B4AF;
+}
+.btn-icon-del svg {
+  width: 14px;
+  height: 14px;
+}
+
 .btn.sm { padding: 4px 10px; font-size: 13px; }
 .btn svg { width: 15px; height: 15px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }

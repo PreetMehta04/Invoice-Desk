@@ -307,6 +307,31 @@ async def review(run_id: str, request: Request, current_user: dict = Depends(get
     return {"final_decision": final}
 
 
+@app.delete("/api/runs/{run_id}")
+def delete_run(run_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    run = db.q1("SELECT id, file_path FROM runs WHERE id=? AND (user_id=? OR user_id IS NULL)", (run_id, user_id))
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    if run.get("file_path"):
+        try:
+            fp = Path(run["file_path"])
+            if fp.exists() and config.UPLOAD_DIR in fp.resolve().parents:
+                fp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    events.remove_live(run_id)
+
+    db.execute("DELETE FROM run_events WHERE run_id=?", (run_id,))
+    db.execute("DELETE FROM ap_ledger WHERE run_id=?", (run_id,))
+    db.execute("DELETE FROM runs WHERE id=?", (run_id,))
+
+    return {"ok": True, "deleted_run_id": run_id}
+
+
+
 # ------------------------------------------------------------------------------------------------ dashboard data
 @app.get("/api/stats")
 def stats(current_user: dict = Depends(get_current_user)):

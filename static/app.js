@@ -44,6 +44,7 @@ const I = {
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z"/><path d="M12 8v5M12 16v.1" stroke-linecap="round"/></svg>',
   arrow: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>',
   dl: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 7L8 10.5 11.5 7M3 13h10"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
 };
 const statusIcon = (s) => ({ pass: I.check, warn: I.warn, fail: I.x, info: I.info }[s] || I.info);
@@ -173,7 +174,7 @@ async function renderDashboard() {
       </div>` : ""}`;
     $("#runs").innerHTML = runs.length ? `
       <table class="grid">
-        <thead><tr><th>Received</th><th>Invoice</th><th class="hide-sm">Vendor</th><th class="hide-sm">PO</th><th class="num">Amount</th><th>Decision</th><th class="hide-sm">Reason</th><th class="num hide-sm">Time</th></tr></thead>
+        <thead><tr><th>Received</th><th>Invoice</th><th class="hide-sm">Vendor</th><th class="hide-sm">PO</th><th class="num">Amount</th><th>Decision</th><th class="hide-sm">Reason</th><th class="num hide-sm">Time</th><th style="width:36px"></th></tr></thead>
         <tbody>${runs.map((r) => {
           const live = r.status === "queued" || r.status === "running";
           const reviewed = r.review_status && r.review_status !== "pending";
@@ -185,10 +186,31 @@ async function renderDashboard() {
             <td class="num">${inr(r.gross_amount)}</td>
             <td>${chip(r.final_decision, live)}${reviewed ? `<div class="sub">by reviewer</div>` : r.review_status === "pending" ? `<div class="sub">${esc(OWNER_LABEL[r.route_to] || "")}</div>` : ""}</td>
             <td class="hide-sm" style="max-width:340px">${esc(r.headline || "")}</td>
-            <td class="num hide-sm">${secs(r.duration_ms)}</td></tr>`;
+            <td class="num hide-sm">${secs(r.duration_ms)}</td>
+            <td class="nw" style="text-align:center" onclick="event.stopPropagation()">
+              <button class="btn-icon-del" title="Delete invoice" data-del="${r.id}" data-inv="${esc(r.invoice_number || r.filename)}">${I.trash}</button>
+            </td></tr>`;
         }).join("")}</tbody></table>`
       : `<div class="empty"><strong>No invoices yet</strong>Drop a PDF or run one of the sample invoices to see the process in action.<div style="margin-top:12px"><a class="btn primary" href="#/process">Process an invoice</a></div></div>`;
-    $$("#runs tr.click").forEach((tr) => (tr.onclick = () => (location.hash = `#/run/${tr.dataset.id}`)));
+    $$("#runs tr.click").forEach((tr) => (tr.onclick = (e) => {
+      if (e.target.closest("button")) return;
+      location.hash = `#/run/${tr.dataset.id}`;
+    }));
+    $$("#runs button[data-del]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.del;
+        const name = b.dataset.inv;
+        if (!confirm(`Delete invoice ${name}?\n\nThis will remove it from processing history, release any booked PO balance, and automatically recalculate all stats.`)) return;
+        try {
+          await api(`/api/runs/${id}`, { method: "DELETE" });
+          toast(`Deleted invoice ${name}`);
+          await load();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+    });
     $("#nav-review").textContent = s.pending_review || "";
     return s.running > 0;
   }
@@ -279,6 +301,7 @@ async function renderRun(id) {
         <div class="meta" id="run-meta"></div>
       </div>
       <div style="display:flex;gap:8px">
+        <button class="btn bad" id="btn-delete-run">${I.trash} Delete invoice</button>
         <a class="btn" href="#/process">${I.upload} Process another</a>
         <a class="btn" id="dl-json" href="/api/runs/${id}/output.json" onclick="this.href='/api/runs/${id}/output.json?token=' + encodeURIComponent(getToken() || '')">${I.dl} Decision JSON</a>
       </div>
@@ -300,6 +323,18 @@ async function renderRun(id) {
         </section>
       </div>
     </div>`;
+
+  $("#btn-delete-run").onclick = async () => {
+    const invName = run.invoice_number || run.filename || run.id;
+    if (!confirm(`Delete invoice ${invName}?\n\nThis will remove it from processing history, release any booked PO balance, and automatically recalculate all stats.`)) return;
+    try {
+      await api(`/api/runs/${id}`, { method: "DELETE" });
+      toast(`Deleted invoice ${invName}`);
+      location.hash = "#/";
+    } catch (err) {
+      toast(err.message, true);
+    }
+  };
 
   $("#pipeline").addEventListener("click", (e) => {
     const top = e.target.closest(".stage-top");
@@ -568,9 +603,31 @@ async function renderReview() {
     $("#q").innerHTML = runs.length ? `<table class="grid"><thead><tr><th>Invoice</th><th>Why it's held</th><th>Owner</th><th class="num">Amount</th><th>Received</th><th></th></tr></thead><tbody>
       ${runs.map((r) => `<tr class="click" data-id="${r.id}"><td><strong>${esc(r.invoice_number || "—")}</strong><div class="sub">${esc(r.vendor_name || "")}</div></td>
         <td style="max-width:420px">${esc(r.headline)}</td><td><span class="chip NEEDS_REVIEW">${esc(OWNER_LABEL[r.route_to] || r.route_to || "AP")}</span></td>
-        <td class="num">${inr(r.gross_amount)}</td><td>${when(r.created_at)}</td><td class="num"><span class="btn sm">Open</span></td></tr>`).join("")}</tbody></table>`
+        <td class="num">${inr(r.gross_amount)}</td><td>${when(r.created_at)}</td>
+        <td class="num nw" onclick="event.stopPropagation()">
+          <span class="btn sm" onclick="location.hash='#/run/${r.id}'">Open</span>
+          <button class="btn-icon-del" title="Delete invoice" data-del-rev="${r.id}" data-inv="${esc(r.invoice_number || r.filename)}">${I.trash}</button>
+        </td></tr>`).join("")}</tbody></table>`
       : `<div class="empty"><strong>Nothing waiting for review</strong>Invoices with exceptions will appear here.</div>`;
-    $$("#q tr.click").forEach((tr) => (tr.onclick = () => (location.hash = `#/run/${tr.dataset.id}`)));
+    $$("#q tr.click").forEach((tr) => (tr.onclick = (e) => {
+      if (e.target.closest("button")) return;
+      location.hash = `#/run/${tr.dataset.id}`;
+    }));
+    $$("#q button[data-del-rev]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const id = b.dataset.delRev;
+        const name = b.dataset.inv;
+        if (!confirm(`Delete invoice ${name}?\n\nThis will remove it from the review queue and recalculate all stats.`)) return;
+        try {
+          await api(`/api/runs/${id}`, { method: "DELETE" });
+          toast(`Deleted ${name}`);
+          await load();
+        } catch (err) {
+          toast(err.message, true);
+        }
+      };
+    });
     $("#nav-review").textContent = runs.length || "";
   }
   await load();

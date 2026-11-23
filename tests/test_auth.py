@@ -171,3 +171,49 @@ def test_user_data_isolation():
     # Bob cannot view or fetch Alice's run
     r_unauthorized = client.get(f"/api/runs/{alice_run_id}", headers=h_bob)
     assert r_unauthorized.status_code == 404
+
+
+def test_delete_run_and_auto_adjust():
+    client = TestClient(app)
+
+    # 1. Register Alice and run an invoice
+    r_alice = client.post("/api/auth/signup", json={
+        "name": "Alice Delete", "email": "alice.del@kestrel.com", "password": "Password@123", "confirm_password": "Password@123"
+    })
+    h_alice = {"Authorization": f"Bearer {r_alice.json()['token']}"}
+
+    r_run = client.post("/api/samples/01_happy_apex_furniture.pdf/run", headers=h_alice)
+    assert r_run.status_code == 200
+    run_id = r_run.json()["run_id"]
+
+    # Alice has 1 run and stats reflect it
+    stats_before = client.get("/api/stats", headers=h_alice).json()
+    assert stats_before["total"] == 1
+
+    # 2. Bob cannot delete Alice's run
+    r_bob = client.post("/api/auth/signup", json={
+        "name": "Bob Del", "email": "bob.del@kestrel.com", "password": "Password@123", "confirm_password": "Password@123"
+    })
+    h_bob = {"Authorization": f"Bearer {r_bob.json()['token']}"}
+    r_del_unauth = client.delete(f"/api/runs/{run_id}", headers=h_bob)
+    assert r_del_unauth.status_code == 404
+
+    # 3. Alice deletes her run
+    r_del = client.delete(f"/api/runs/{run_id}", headers=h_alice)
+    assert r_del.status_code == 200
+    assert r_del.json()["ok"] is True
+
+    # 4. Run is gone
+    assert client.get(f"/api/runs/{run_id}", headers=h_alice).status_code == 404
+    assert client.get("/api/runs", headers=h_alice).json() == []
+
+    # 5. Stats adjust automatically back to 0
+    stats_after = client.get("/api/stats", headers=h_alice).json()
+    assert stats_after["total"] == 0
+    assert stats_after["value_processed"] == 0
+
+    # 6. Database tables for that run are cleaned up
+    assert db.q("SELECT * FROM runs WHERE id=?", (run_id,)) == []
+    assert db.q("SELECT * FROM run_events WHERE run_id=?", (run_id,)) == []
+    assert db.q("SELECT * FROM ap_ledger WHERE run_id=?", (run_id,)) == []
+

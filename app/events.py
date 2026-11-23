@@ -73,3 +73,10 @@ def wait_events(run_id, after_seq, timeout=15.0):
 def is_live(run_id):
     with _cv:
         return run_id in _live and not _live[run_id]["done"]
+
+
+def remove_live(run_id):
+    with _cv:
+        _live.pop(run_id, None)
+        _cv.notify_all()
+
