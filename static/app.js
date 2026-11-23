@@ -44,14 +44,27 @@ const I = {
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6l8-3z"/><path d="M12 8v5M12 16v.1" stroke-linecap="round"/></svg>',
   arrow: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>',
   dl: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 7L8 10.5 11.5 7M3 13h10"/></svg>',
+  logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
 };
 const statusIcon = (s) => ({ pass: I.check, warn: I.warn, fail: I.x, info: I.info }[s] || I.info);
 
+const TOKEN_KEY = "invoice_desk_auth_token";
+let CURRENT_USER = null;
+const getToken = () => localStorage.getItem(TOKEN_KEY);
+const setToken = (t) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
+
 async function api(path, opts = {}) {
-  const res = await fetch(path, opts);
-  if (res.status === 401) {
-    showAuth();
-    throw new Error("Session expired — please sign in again.");
+  const token = getToken();
+  const headers = { ...(opts.headers || {}) };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    setToken(null);
+    CURRENT_USER = null;
+    showAuthScreen("login", "Session expired. Please sign in again.");
+    throw new Error("Authentication required");
   }
   if (!res.ok) {
     let msg = res.statusText;
@@ -116,7 +129,7 @@ async function renderDashboard() {
     <div class="page-head">
       <div><h1>Dashboard</h1><p>Every invoice the process has handled, the decision it reached, and why.</p></div>
       <div style="display:flex;gap:8px">
-        <a class="btn" href="/api/runs.csv">${I.dl} Export CSV</a>
+        <a class="btn" href="/api/runs.csv" onclick="this.href='/api/runs.csv?token=' + encodeURIComponent(getToken() || '')">${I.dl} Export CSV</a>
         <a class="btn primary" href="#/process">${I.upload} Process invoices</a>
       </div>
     </div>
@@ -267,7 +280,7 @@ async function renderRun(id) {
       </div>
       <div style="display:flex;gap:8px">
         <a class="btn" href="#/process">${I.upload} Process another</a>
-        <a class="btn" id="dl-json" href="/api/runs/${id}/output.json">${I.dl} Decision JSON</a>
+        <a class="btn" id="dl-json" href="/api/runs/${id}/output.json" onclick="this.href='/api/runs/${id}/output.json?token=' + encodeURIComponent(getToken() || '')">${I.dl} Decision JSON</a>
       </div>
     </div>
     <div class="run-layout">
@@ -404,7 +417,7 @@ async function renderRun(id) {
     $("#doctabs").onclick = (e) => { const b = e.target.closest("button"); if (b) { docTab = b.dataset.t; renderDoc(); } };
     const body = $("#docbody");
     if (docTab === "doc") {
-      if (!$("iframe", body)) body.innerHTML = `<iframe class="doc-frame" src="/api/runs/${id}/file#view=FitH&navpanes=0" title="Invoice PDF"></iframe>`;
+      if (!$("iframe", body)) body.innerHTML = `<iframe class="doc-frame" src="/api/runs/${id}/file?token=${encodeURIComponent(getToken() || '')}#view=FitH&navpanes=0" title="Invoice PDF"></iframe>`;
     } else if (docTab === "data") {
       const ex = run.extracted || state.extract?.payload?.data?.extracted;
       body.innerHTML = ex ? `<div class="pane">${extractedView(ex)}</div>` : `<div class="empty">Extraction hasn't finished yet.</div>`;
@@ -425,7 +438,7 @@ async function renderRun(id) {
   const live = run.live || run.status === "running" || run.status === "queued";
   if (live) {
     every(250, meta);
-    const es = new EventSource(`/api/runs/${id}/events`);
+    const es = new EventSource(`/api/runs/${id}/events?token=${encodeURIComponent(getToken() || '')}`);
     cleanup.push(() => es.close());
     const seen = new Set((run.events || []).map((e) => e.seq));
     es.onmessage = async (m) => {
@@ -668,129 +681,227 @@ function renderHow() {
     </div></div>`;
 }
 
-// ------------------------------------------------------------------------------------------- auth
-let currentUser = null;
+// ------------------------------------------------------------------------------------------- auth UI & session
+const authScreen = $("#auth-screen");
+const appShell = $("#app-shell");
 
-function showAuth() {
-  $("#auth-page").style.display = "";
-  $("#app-shell").style.display = "none";
-  renderLogin();
-}
+function showAuthScreen(initialMode = "login", initialError = "") {
+  cleanup.forEach((f) => f());
+  cleanup = [];
+  if (appShell) appShell.style.display = "none";
+  if (authScreen) authScreen.style.display = "flex";
+  let mode = initialMode;
 
-function showApp(user) {
-  currentUser = user;
-  $("#auth-page").style.display = "none";
-  $("#app-shell").style.display = "";
-  const menu = $("#user-menu");
-  if (menu) {
-    const initials = (user.name || "U").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
-    menu.innerHTML = `<div class="user-info"><span class="user-avatar">${esc(initials)}</span><span class="user-name">${esc(user.name)}</span></div>` +
-      `<button class="btn sm" onclick="doLogout()">Sign out</button>`;
+  function renderForm(err = "") {
+    authScreen.innerHTML = `
+      <div class="auth-card">
+        <div class="auth-brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2B3A8C"/><path d="M9 9h14M9 15h14M9 21h8" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>
+          </span>
+          <h1>Invoice Desk</h1>
+          <p>Kestrel Foods · Accounts Payable Portal</p>
+        </div>
+
+        <div class="auth-tabs" role="tablist">
+          <button type="button" class="auth-tab ${mode === "login" ? "active" : ""}" id="tab-login">Sign In</button>
+          <button type="button" class="auth-tab ${mode === "signup" ? "active" : ""}" id="tab-signup">Create Account</button>
+        </div>
+
+        <div id="auth-err" class="auth-error ${err ? "show" : ""}">${esc(err)}</div>
+
+        ${mode === "login" ? `
+          <form class="auth-form" id="form-auth">
+            <div class="auth-field">
+              <label for="auth-email">Work Email</label>
+              <input id="auth-email" type="email" placeholder="name@kestrel.com" required autocomplete="username" />
+            </div>
+            <div class="auth-field">
+              <label for="auth-password">Password</label>
+              <input id="auth-password" type="password" placeholder="••••••••" required autocomplete="current-password" />
+            </div>
+            <button type="submit" class="btn primary auth-submit" id="btn-submit">Sign In</button>
+          </form>
+
+          <div class="auth-demo-box">
+            <div>
+              <strong>Quick Demo Access</strong><br>
+              <span class="muted">demo@kestrel.com / Password@123</span>
+            </div>
+            <button type="button" class="auth-demo-btn" id="btn-fill-demo">Fill Demo</button>
+          </div>
+
+          <div class="auth-foot">
+            Don't have an account? <a href="#" id="link-switch">Create one here</a>
+          </div>
+        ` : `
+          <form class="auth-form" id="form-auth">
+            <div class="auth-field">
+              <label for="auth-name">Full Name</label>
+              <input id="auth-name" type="text" placeholder="e.g. Preet Mehta" required />
+            </div>
+            <div class="auth-field">
+              <label for="auth-email">Work Email</label>
+              <input id="auth-email" type="email" placeholder="name@kestrel.com" required autocomplete="email" />
+            </div>
+            <div class="auth-field">
+              <label for="auth-password">Password</label>
+              <input id="auth-password" type="password" placeholder="Minimum 6 characters" minlength="6" required autocomplete="new-password" />
+            </div>
+            <div class="auth-field">
+              <label for="auth-confirm">Confirm Password</label>
+              <input id="auth-confirm" type="password" placeholder="Re-enter password" minlength="6" required autocomplete="new-password" />
+            </div>
+            <button type="submit" class="btn primary auth-submit" id="btn-submit">Create Account</button>
+          </form>
+
+          <div class="auth-foot">
+            Already have an account? <a href="#" id="link-switch">Sign in here</a>
+          </div>
+        `}
+      </div>
+    `;
+
+    $("#tab-login").onclick = () => { mode = "login"; renderForm(); };
+    $("#tab-signup").onclick = () => { mode = "signup"; renderForm(); };
+    const linkSwitch = $("#link-switch");
+    if (linkSwitch) {
+      linkSwitch.onclick = (e) => {
+        e.preventDefault();
+        mode = mode === "login" ? "signup" : "login";
+        renderForm();
+      };
+    }
+
+    const fillBtn = $("#btn-fill-demo");
+    if (fillBtn) {
+      fillBtn.onclick = () => {
+        $("#auth-email").value = "demo@kestrel.com";
+        $("#auth-password").value = "Password@123";
+      };
+    }
+
+    const form = $("#form-auth");
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const submitBtn = $("#btn-submit");
+      submitBtn.disabled = true;
+      submitBtn.textContent = mode === "login" ? "Signing In..." : "Creating Account...";
+
+      try {
+        if (mode === "login") {
+          const email = $("#auth-email").value.trim();
+          const password = $("#auth-password").value;
+          const res = await api("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          setToken(res.token);
+          CURRENT_USER = res.user;
+          toast(`Welcome back, ${CURRENT_USER.name}!`);
+          showAppShell();
+        } else {
+          const name = $("#auth-name").value.trim();
+          const email = $("#auth-email").value.trim();
+          const password = $("#auth-password").value;
+          const confirm_password = $("#auth-confirm").value;
+
+          if (password !== confirm_password) {
+            renderForm("Passwords do not match");
+            return;
+          }
+
+          const res = await api("/api/auth/signup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, email, password, confirm_password }),
+          });
+          setToken(res.token);
+          CURRENT_USER = res.user;
+          toast(`Account created! Welcome, ${CURRENT_USER.name}!`);
+          showAppShell();
+        }
+      } catch (err) {
+        renderForm(err.message || "Authentication failed");
+      }
+    };
   }
+
+  renderForm(initialError);
 }
 
-function renderLogin() {
-  $("#auth-form").innerHTML = `
-    <h2>Sign in</h2>
-    <p class="auth-sub">Enter your credentials to access Invoice Desk.</p>
-    <form id="login-form" autocomplete="on">
-      <label>Email<input type="email" name="email" required autofocus autocomplete="email"></label>
-      <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
-      <div class="auth-error" id="auth-error"></div>
-      <button class="btn primary auth-btn" type="submit">Sign in</button>
-    </form>
-    <p class="auth-switch">Don't have an account? <a href="#" onclick="renderSignup();return false">Create account</a></p>`;
-  $("#login-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const btn = e.target.querySelector("button[type=submit]");
-    btn.disabled = true;
-    btn.textContent = "Signing in…";
-    $("#auth-error").textContent = "";
+function renderUserBadge() {
+  const ub = $("#user-badge");
+  if (!ub || !CURRENT_USER) return;
+  const initials = (CURRENT_USER.name || "U")
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  ub.innerHTML = `
+    <div class="user-info">
+      <div class="user-avatar" title="${esc(CURRENT_USER.email)}">${esc(initials)}</div>
+      <div class="user-meta">
+        <span class="user-name">${esc(CURRENT_USER.name)}</span>
+        <span class="user-role">${esc(CURRENT_USER.role || CURRENT_USER.email)}</span>
+      </div>
+    </div>
+    <button class="user-logout" id="btn-logout" title="Log Out" aria-label="Log Out">
+      ${I.logout}
+    </button>
+  `;
+
+  $("#btn-logout").onclick = async () => {
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: f.get("email"), password: f.get("password") }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Login failed");
-      showApp(data.user);
-      bootApp();
-    } catch (err) {
-      $("#auth-error").textContent = err.message;
-      btn.disabled = false;
-      btn.textContent = "Sign in";
-    }
+      await api("/api/auth/logout", { method: "POST" });
+    } catch (_) {}
+    setToken(null);
+    CURRENT_USER = null;
+    toast("Signed out successfully");
+    showAuthScreen("login");
   };
 }
 
-function renderSignup() {
-  $("#auth-form").innerHTML = `
-    <h2>Create account</h2>
-    <p class="auth-sub">Set up your Invoice Desk account.</p>
-    <form id="signup-form" autocomplete="on">
-      <label>Full name<input type="text" name="name" required autofocus autocomplete="name"></label>
-      <label>Email<input type="email" name="email" required autocomplete="email"></label>
-      <label>Password<input type="password" name="password" required minlength="6" autocomplete="new-password"></label>
-      <label>Confirm password<input type="password" name="confirm" required minlength="6" autocomplete="new-password"></label>
-      <div class="auth-error" id="auth-error"></div>
-      <button class="btn primary auth-btn" type="submit">Create account</button>
-    </form>
-    <p class="auth-switch">Already have an account? <a href="#" onclick="renderLogin();return false">Sign in</a></p>`;
-  $("#signup-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const btn = e.target.querySelector("button[type=submit]");
-    btn.disabled = true;
-    btn.textContent = "Creating account…";
-    $("#auth-error").textContent = "";
-    try {
-      const res = await fetch("/api/auth/signup", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: f.get("name"), email: f.get("email"), password: f.get("password"), confirm: f.get("confirm") }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Sign-up failed");
-      showApp(data.user);
-      bootApp();
-    } catch (err) {
-      $("#auth-error").textContent = err.message;
-      btn.disabled = false;
-      btn.textContent = "Create account";
-    }
-  };
-}
-
-async function doLogout() {
-  try { await fetch("/api/auth/logout", { method: "POST" }); } catch (_) {}
-  currentUser = null;
-  showAuth();
+let navInterval = null;
+function showAppShell() {
+  if (authScreen) authScreen.style.display = "none";
+  if (appShell) appShell.style.display = "grid";
+  renderUserBadge();
+  refreshNav();
+  if (!navInterval) {
+    navInterval = setInterval(() => {
+      if (CURRENT_USER) refreshNav();
+    }, 8000);
+  }
+  route();
 }
 
 // ------------------------------------------------------------------------------------------- boot
-async function bootApp() {
+(async function boot() {
   try {
     CONFIG = await api("/api/config");
     $("#engine-badge").innerHTML = `<span class="engine-dot ${CONFIG.ai_enabled ? "" : "local"}"></span>Extraction engine<strong>${esc(CONFIG.engine)}</strong>`;
   } catch (e) {
-    app.innerHTML = `<div class="panel empty"><strong>Can't reach the server</strong>${esc(e.message)}</div>`;
-    return;
+    console.error("Config load error:", e);
   }
-  refreshNav();
-  setInterval(refreshNav, 8000);
-  route();
-}
 
-(async function boot() {
-  // Check if already logged in
-  try {
-    const res = await fetch("/api/auth/me");
-    if (res.ok) {
-      const data = await res.json();
-      showApp(data.user);
-      bootApp();
-      return;
+  const token = getToken();
+  if (token) {
+    try {
+      const res = await api("/api/auth/me");
+      CURRENT_USER = res.user;
+    } catch (e) {
+      setToken(null);
+      CURRENT_USER = null;
     }
-  } catch (_) {}
-  showAuth();
+  }
+
+  if (CURRENT_USER) {
+    showAppShell();
+  } else {
+    showAuthScreen("login");
+  }
 })();

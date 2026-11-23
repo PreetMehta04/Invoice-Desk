@@ -8,18 +8,7 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232B3A8C'/><path d='M9 9h14M9 15h14M9 21h8' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
 </head>
 <body>
-  <!-- Auth page (shown when not logged in) -->
-  <div class="auth-page" id="auth-page" style="display:none">
-    <div class="auth-card">
-      <div class="auth-brand">
-        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7"/><path d="M9 9h14M9 15h14M9 21h8"/></svg></span>
-        <div><strong>Invoice Desk</strong><small>Kestrel Foods · AP</small></div>
-      </div>
-      <div id="auth-form"></div>
-    </div>
-  </div>
-
-  <!-- Main app shell (shown when logged in) -->
+  <div id="auth-screen" class="auth-screen" style="display:none"></div>
   <div class="shell" id="app-shell" style="display:none">
     <aside class="side">
       <a class="brand" href="#/">
@@ -34,11 +23,11 @@
         <a href="#/rules" data-route="rules">Rules</a>
         <a href="#/how" data-route="how">How it works</a>
       </nav>
+      <div id="user-badge" class="user-badge"></div>
       <div class="side-foot" id="engine-badge"></div>
-      <div class="user-menu" id="user-menu"></div>
     </aside>
     <main class="main" id="app" tabindex="-1"></main>
-  </div><!-- end .shell / #app-shell -->
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/static/app.js"></script>
 </body>

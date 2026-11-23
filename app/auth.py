@@ -1,103 +1,134 @@
-"""User authentication: registration, login, session management, password hashing.
-
-Uses stdlib PBKDF2-HMAC-SHA256 for password hashing (no extra dependencies) and
-signed session tokens stored in SQLite and sent as HTTP-only cookies."""
+"""User authentication, secure PBKDF2 password hashing, and session management."""
 import hashlib
-import os
 import re
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from . import db
 
-# ------------------------------------------------------------------------------- password hashing
-_ITERATIONS = 260_000  # OWASP-recommended for PBKDF2-SHA256
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+HASH_ITERATIONS = 100_000
+
 
 def hash_password(password: str) -> str:
-    """Return 'salt$hash' using PBKDF2-HMAC-SHA256."""
-    salt = os.urandom(16).hex()
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _ITERATIONS).hex()
-    return f"{salt}${h}"
+    """Hash password using PBKDF2-HMAC-SHA256 with a unique random salt."""
+    salt = secrets.token_hex(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), HASH_ITERATIONS)
+    return f"pbkdf2:sha256:{HASH_ITERATIONS}${salt}${key.hex()}"
 
 
-def verify_password(password: str, stored: str) -> bool:
-    salt, expected = stored.split("$", 1)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _ITERATIONS).hex()
-    return secrets.compare_digest(h, expected)
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify password against stored hash using constant-time comparison."""
+    try:
+        parts = hashed.split("$")
+        if len(parts) != 3:
+            return False
+        meta, salt, expected_key = parts
+        _, algo, iters_str = meta.split(":")
+        iterations = int(iters_str)
+        key = hashlib.pbkdf2_hmac(algo, password.encode("utf-8"), salt.encode("utf-8"), iterations)
+        return secrets.compare_digest(key.hex(), expected_key)
+    except Exception:
+        return False
 
 
-# ------------------------------------------------------------------------------- user CRUD
-_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+def is_valid_email(email: str) -> bool:
+    return bool(email and EMAIL_REGEX.match(email.strip()))
 
-def validate_signup(name: str, email: str, password: str, confirm: str) -> str | None:
-    """Return an error message, or None if valid."""
+
+def create_user(name: str, email: str, password: str, confirm_password: str | None = None, role: str = "AP Reviewer") -> dict:
     name = (name or "").strip()
     email = (email or "").strip().lower()
-    if not name or len(name) < 2:
-        return "Name must be at least 2 characters."
-    if not email or not _EMAIL_RE.match(email):
-        return "Enter a valid email address."
+    password = password or ""
+
+    if len(name) < 2:
+        raise ValueError("Name must be at least 2 characters")
+    if not is_valid_email(email):
+        raise ValueError("Please provide a valid email address")
     if len(password) < 6:
-        return "Password must be at least 6 characters."
-    if password != confirm:
-        return "Passwords do not match."
-    if get_user_by_email(email):
-        return "An account with this email already exists."
-    return None
+        raise ValueError("Password must be at least 6 characters")
+    if confirm_password is not None and password != confirm_password:
+        raise ValueError("Passwords do not match")
 
+    existing = db.q1("SELECT id FROM users WHERE email=?", (email,))
+    if existing:
+        raise ValueError("An account with this email address already exists")
 
-def create_user(name: str, email: str, password: str) -> dict:
-    email = email.strip().lower()
-    pw_hash = hash_password(password)
-    uid = "U" + secrets.token_hex(6).upper()
-    now = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    user_id = f"U-{uuid.uuid4().hex[:10]}"
+    p_hash = hash_password(password)
+
     db.execute(
-        "INSERT INTO users (id, name, email, pw_hash, created_at) VALUES (?,?,?,?,?)",
-        (uid, name.strip(), email, pw_hash, now),
+        "INSERT INTO users (id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?)",
+        (user_id, name, email, p_hash, role),
     )
-    return {"id": uid, "name": name.strip(), "email": email}
+    return {"id": user_id, "name": name, "email": email, "role": role}
 
 
-def get_user_by_email(email: str) -> dict | None:
-    return db.q1("SELECT * FROM users WHERE email=?", (email.strip().lower(),))
+def authenticate_user(email: str, password: str) -> dict | None:
+    email = (email or "").strip().lower()
+    password = password or ""
+    if not email or not password:
+        return None
+
+    user = db.q1("SELECT id, name, email, password_hash, role FROM users WHERE email=?", (email,))
+    if not user:
+        # Run dummy hash to prevent timing attack enumeration
+        hash_password("dummy_password_for_timing")
+        return None
+
+    if not verify_password(password, user["password_hash"]):
+        return None
+
+    return {"id": user["id"], "name": user["name"], "email": user["email"], "role": user["role"]}
 
 
-def get_user_by_id(uid: str) -> dict | None:
-    return db.q1("SELECT id, name, email, created_at FROM users WHERE id=?", (uid,))
-
-
-# ------------------------------------------------------------------------------- session management
-SESSION_TTL = timedelta(days=7)
-
-def create_session(user_id: str) -> str:
-    """Create a new session token and persist it. Returns the token."""
-    token = secrets.token_hex(32)
-    expires = (datetime.now(timezone.utc) + SESSION_TTL).isoformat(timespec="milliseconds")
+def create_session(user_id: str, days: int = 7) -> str:
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     db.execute(
-        "INSERT INTO sessions (token, user_id, expires_at) VALUES (?,?,?)",
-        (token, user_id, expires),
+        "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
+        (token, user_id, expires_at),
     )
     return token
 
 
-def validate_session(token: str | None) -> dict | None:
-    """Return the user dict if token is valid and not expired, else None."""
+def get_user_by_session(token: str) -> dict | None:
     if not token:
         return None
+
     row = db.q1(
-        "SELECT user_id, expires_at FROM sessions WHERE token=?", (token,)
+        "SELECT s.token, s.expires_at, u.id, u.name, u.email, u.role "
+        "FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token=?",
+        (token,),
     )
     if not row:
         return None
-    if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+
+    try:
+        exp = datetime.fromisoformat(row["expires_at"])
+        if exp < datetime.now(timezone.utc):
+            db.execute("DELETE FROM sessions WHERE token=?", (token,))
+            return None
+    except Exception:
         db.execute("DELETE FROM sessions WHERE token=?", (token,))
         return None
-    return get_user_by_id(row["user_id"])
+
+    return {"id": row["id"], "name": row["name"], "email": row["email"], "role": row["role"]}
 
 
-def delete_session(token: str):
-    db.execute("DELETE FROM sessions WHERE token=?", (token,))
+def revoke_session(token: str) -> None:
+    if token:
+        db.execute("DELETE FROM sessions WHERE token=?", (token,))
 
 
-def delete_user_sessions(user_id: str):
-    db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+def seed_default_user():
+    """Ensure a default demo reviewer exists for testing and instant access."""
+    count_row = db.q1("SELECT COUNT(*) as cnt FROM users")
+    if not count_row or count_row["cnt"] == 0:
+        create_user(
+            name="Demo Reviewer",
+            email="demo@kestrel.com",
+            password="Password@123",
+            role="AP Lead",
+        )

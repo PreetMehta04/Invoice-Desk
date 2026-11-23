@@ -38,11 +38,13 @@ CREATE TABLE IF NOT EXISTS run_events (
   title TEXT, payload_json TEXT);
 CREATE INDEX IF NOT EXISTS ix_events_run ON run_events(run_id, seq);
 CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, pw_hash TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now')));
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
+  role TEXT DEFAULT 'AP Reviewer', created_at TEXT DEFAULT (datetime('now')));
 CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires_at TEXT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id));
+  token TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL, FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS ix_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS ix_users_email ON users(email);
 """
 
 
@@ -97,9 +99,12 @@ def _read_csv(name):
 def init_db(reset: bool = False):
     with tx() as c:
         if reset:
-            # Never drop users or sessions on reset — only procurement / run data
             for t in ("vendors", "purchase_orders", "po_lines", "goods_receipts", "ap_ledger", "runs", "run_events"):
                 c.execute(f"DROP TABLE IF EXISTS {t}")
+        cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
+        if "pw_hash" in cols and "password_hash" not in cols:
+            c.execute("DROP TABLE IF EXISTS sessions")
+            c.execute("DROP TABLE IF EXISTS users")
         c.executescript(SCHEMA)
         if c.execute("SELECT COUNT(*) FROM vendors").fetchone()[0] == 0:
             _seed(c)

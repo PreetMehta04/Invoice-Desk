@@ -8,20 +8,22 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, Security, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
-from . import config, db, events, pipeline
-from . import auth as user_auth
+from . import auth, config, db, events, pipeline
 
 app = FastAPI(title="Invoice Desk — AI invoice processing", version="1.0")
 MAX_BYTES = 15 * 1024 * 1024
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @app.on_event("startup")
 def _startup():
     db.init_db()
+    auth.seed_default_user()
     config.load_rules()
     # runs interrupted by a restart can never finish — mark them
     db.execute("UPDATE runs SET status='error', decision='ERROR', final_decision='ERROR', error='Interrupted by server restart', "
@@ -49,95 +51,90 @@ def _watch_inbox():
 
 
 # ------------------------------------------------------------------------------------------------ auth
-SESSION_COOKIE = "invoice_desk_session"
+async def get_current_user(
+    request: Request,
+    creds: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> dict:
+    token = None
+    if creds and creds.credentials:
+        token = creds.credentials
+    elif "session_token" in request.cookies:
+        token = request.cookies.get("session_token")
+    elif "token" in request.query_params:
+        token = request.query_params.get("token")
 
-# Paths that don't require authentication
-_PUBLIC_PREFIXES = ("/api/auth/", "/api/health", "/static/", "/favicon.ico")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
-def _get_session_token(request: Request) -> str | None:
-    return request.cookies.get(SESSION_COOKIE)
-
-
-def _require_user(request: Request) -> dict:
-    """Return the current user or raise 401."""
-    user = user_auth.validate_session(_get_session_token(request))
+    user = auth.get_user_by_session(token)
     if not user:
-        raise HTTPException(401, "Not authenticated")
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
     return user
 
 
-from starlette.middleware.base import BaseHTTPMiddleware
-
-class AuthMiddleware(BaseHTTPMiddleware):
-    """Protect API routes. Public paths and the root page are allowed through.
-    Unauthenticated API calls get 401. The UI handles the redirect to login."""
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        # Static files, auth endpoints, health check — always public
-        if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
-            return await call_next(request)
-        # The root page (/) — always serve (the JS decides login vs app)
-        if path == "/":
-            return await call_next(request)
-        # All other /api/ routes require authentication
-        if path.startswith("/api/"):
-            user = user_auth.validate_session(_get_session_token(request))
-            if not user:
-                return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-            request.state.user = user
-        return await call_next(request)
-
-app.add_middleware(AuthMiddleware)
-
-
 @app.post("/api/auth/signup")
-async def signup(request: Request):
+async def signup(request: Request, response: Response):
     body = await request.json()
-    err = user_auth.validate_signup(
-        body.get("name", ""), body.get("email", ""),
-        body.get("password", ""), body.get("confirm", ""),
+    name = body.get("name")
+    email = body.get("email")
+    password = body.get("password")
+    confirm_password = body.get("confirm_password")
+    try:
+        user = auth.create_user(name, email, password, confirm_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    token = auth.create_session(user["id"])
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=7 * 24 * 3600,
+        path="/",
     )
-    if err:
-        raise HTTPException(400, err)
-    user = user_auth.create_user(body["name"], body["email"], body["password"])
-    token = user_auth.create_session(user["id"])
-    resp = JSONResponse({"ok": True, "user": user})
-    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=7 * 86400)
-    return resp
+    return {"token": token, "user": user}
 
 
 @app.post("/api/auth/login")
-async def login(request: Request):
+async def login(request: Request, response: Response):
     body = await request.json()
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password", "")
-    if not email or not password:
-        raise HTTPException(400, "Email and password are required.")
-    user = user_auth.get_user_by_email(email)
-    if not user or not user_auth.verify_password(password, user["pw_hash"]):
-        raise HTTPException(401, "Invalid email or password.")
-    token = user_auth.create_session(user["id"])
-    resp = JSONResponse({"ok": True, "user": {"id": user["id"], "name": user["name"], "email": user["email"]}})
-    resp.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=7 * 86400)
-    return resp
-
-
-@app.post("/api/auth/logout")
-async def logout(request: Request):
-    token = _get_session_token(request)
-    if token:
-        user_auth.delete_session(token)
-    resp = JSONResponse({"ok": True})
-    resp.delete_cookie(SESSION_COOKIE)
-    return resp
+    email = body.get("email")
+    password = body.get("password")
+    user = auth.authenticate_user(email, password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    token = auth.create_session(user["id"])
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=7 * 24 * 3600,
+        path="/",
+    )
+    return {"token": token, "user": user}
 
 
 @app.get("/api/auth/me")
-async def me(request: Request):
-    user = user_auth.validate_session(_get_session_token(request))
-    if not user:
-        raise HTTPException(401, "Not authenticated")
-    return {"user": user}
+async def me(current_user: dict = Depends(get_current_user)):
+    return {"user": current_user}
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response):
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "session_token" in request.cookies:
+        token = request.cookies.get("session_token")
+    elif "token" in request.query_params:
+        token = request.query_params.get("token")
+
+    if token:
+        auth.revoke_session(token)
+    response.delete_cookie(key="session_token", path="/")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------------------------------------ meta
@@ -168,7 +165,7 @@ def _start(data: bytes, filename: str, source: str):
 
 
 @app.post("/api/runs")
-async def upload(files: list[UploadFile] = File(...)):
+async def upload(files: list[UploadFile] = File(...), current_user: dict = Depends(get_current_user)):
     ids, errors = [], []
     for f in files:
         try:
@@ -186,19 +183,19 @@ def _manifest():
 
 
 @app.get("/api/samples")
-def samples():
+def samples(current_user: dict = Depends(get_current_user)):
     return _manifest()
 
 
 @app.get("/api/samples/{name}")
-def sample_file(name: str):
+def sample_file(name: str, current_user: dict = Depends(get_current_user)):
     if name not in {m["file"] for m in _manifest()}:
         raise HTTPException(404)
     return FileResponse(config.SAMPLES_DIR / name, media_type="application/pdf")
 
 
 @app.post("/api/samples/{name}/run")
-def run_sample(name: str):
+def run_sample(name: str, current_user: dict = Depends(get_current_user)):
     if name not in {m["file"] for m in _manifest()}:
         raise HTTPException(404, "Unknown sample")
     return {"run_id": _start((config.SAMPLES_DIR / name).read_bytes(), name, "sample")}
@@ -209,7 +206,7 @@ RUN_COLS = ("id, filename, source, status, decision, final_decision, headline, r
 
 
 @app.get("/api/runs")
-def list_runs(decision: str | None = None, limit: int = 200):
+def list_runs(decision: str | None = None, limit: int = 200, current_user: dict = Depends(get_current_user)):
     sql = f"SELECT {RUN_COLS} FROM runs"
     params = []
     if decision:
@@ -222,7 +219,7 @@ def list_runs(decision: str | None = None, limit: int = 200):
 
 
 @app.get("/api/runs.csv")
-def export_csv():
+def export_csv(current_user: dict = Depends(get_current_user)):
     rows = db.q(f"SELECT {RUN_COLS}, reviewer_note FROM runs ORDER BY created_at DESC")
     buf = io.StringIO()
     if rows:
@@ -234,7 +231,7 @@ def export_csv():
 
 
 @app.get("/api/runs/{run_id}")
-def get_run(run_id: str):
+def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
     run = db.q1("SELECT * FROM runs WHERE id=?", (run_id,))
     if not run:
         raise HTTPException(404, "Run not found")
@@ -247,7 +244,7 @@ def get_run(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/file")
-def run_file(run_id: str):
+def run_file(run_id: str, current_user: dict = Depends(get_current_user)):
     run = db.q1("SELECT file_path, filename FROM runs WHERE id=?", (run_id,))
     if not run or not Path(run["file_path"]).exists():
         raise HTTPException(404)
@@ -256,7 +253,7 @@ def run_file(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/output.json")
-def run_output(run_id: str):
+def run_output(run_id: str, current_user: dict = Depends(get_current_user)):
     run = db.q1("SELECT result_json FROM runs WHERE id=?", (run_id,))
     if not run or not run["result_json"]:
         raise HTTPException(404, "No output yet")
@@ -265,7 +262,7 @@ def run_output(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/events")
-async def run_events(run_id: str, request: Request):
+async def run_events(run_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """SSE stream. Replays persisted events, then pushes new ones until the run completes."""
     if not db.q1("SELECT id FROM runs WHERE id=?", (run_id,)):
         raise HTTPException(404)
@@ -295,10 +292,11 @@ async def run_events(run_id: str, request: Request):
 
 
 @app.post("/api/runs/{run_id}/review")
-async def review(run_id: str, request: Request):
+async def review(run_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     body = await request.json()
     try:
-        final = pipeline.review(run_id, body.get("action"), (body.get("note") or "").strip(), body.get("reviewer") or "AP reviewer")
+        reviewer_name = body.get("reviewer") or f"{current_user['name']} ({current_user['role']})"
+        final = pipeline.review(run_id, body.get("action"), (body.get("note") or "").strip(), reviewer_name)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"final_decision": final}
@@ -306,7 +304,7 @@ async def review(run_id: str, request: Request):
 
 # ------------------------------------------------------------------------------------------------ dashboard data
 @app.get("/api/stats")
-def stats():
+def stats(current_user: dict = Depends(get_current_user)):
     runs = db.q("SELECT final_decision, decision, gross_amount, duration_ms, review_status, result_json, status FROM runs")
     done = [r for r in runs if r["status"] == "completed"]
     by = {k: sum(1 for r in done if r["final_decision"] == k) for k in ("APPROVED", "NEEDS_REVIEW", "REJECTED")}
@@ -336,7 +334,7 @@ def stats():
 
 
 @app.get("/api/procurement")
-def procurement():
+def procurement(current_user: dict = Depends(get_current_user)):
     return {
         "vendors": db.vendors(),
         "pos": db.all_pos(),
@@ -346,21 +344,22 @@ def procurement():
 
 
 @app.get("/api/rules")
-def get_rules():
+def get_rules(current_user: dict = Depends(get_current_user)):
     return config.load_rules()
 
 
 @app.put("/api/rules")
-async def put_rules(request: Request):
+async def put_rules(request: Request, current_user: dict = Depends(get_current_user)):
     return config.save_rules(await request.json())
 
 
 @app.post("/api/reset")
-def reset():
+def reset(current_user: dict = Depends(get_current_user)):
     """Restore procurement data, AP ledger and rules to the seeded state and clear run history (for demos)."""
     if any(events.is_live(r["id"]) for r in db.q("SELECT id FROM runs WHERE status IN ('queued','running')")):
         raise HTTPException(409, "Wait for running invoices to finish")
     db.init_db(reset=True)
+    auth.seed_default_user()
     config.reset_rules()
     for f in config.UPLOAD_DIR.glob("*.pdf"):
         f.unlink(missing_ok=True)
