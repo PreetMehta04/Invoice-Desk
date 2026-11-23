@@ -1,0 +1,128 @@
+[
+  {
+    "file": "01_happy_apex_furniture.pdf",
+    "group": "happy",
+    "title": "Clean invoice, full 3-way match",
+    "blurb": "Apex Office Solutions bills PO-2026-0101 for furniture. Machine-readable PDF, goods fully received.",
+    "expected": "APPROVED",
+    "vendor": "Apex Office Solutions Pvt Ltd",
+    "gross": 417720.0
+  },
+  {
+    "file": "02_happy_brightline_freight.pdf",
+    "group": "happy",
+    "title": "Partial billing on a blanket service PO",
+    "blurb": "Brightline bills 5 of 12 freight trips on blanket PO-2026-0102 (4 already billed). Services need no goods receipt.",
+    "expected": "APPROVED",
+    "vendor": "Brightline Logistics LLP",
+    "gross": 247800.0
+  },
+  {
+    "file": "03_tolerance_coastal_boxes.pdf",
+    "group": "happy",
+    "title": "Small price variance within tolerance",
+    "blurb": "Coastal Packaging charges ₹18.20 vs ₹18.00 on the PO for boxes. PO written without its prefix.",
+    "expected": "APPROVED",
+    "vendor": "Coastal Packaging Industries",
+    "gross": 160480.0
+  },
+  {
+    "file": "EC1_scanned_no_po_delta_laptops.pdf",
+    "group": "edge",
+    "title": "Scanned image, no PO number",
+    "blurb": "Image-only scan with skew and noise. Vendor references an 'email order' instead of a PO — the process must infer which of Delta's open POs it belongs to.",
+    "expected": "APPROVED",
+    "vendor": "Delta Tech Systems Pvt Ltd",
+    "gross": 769360.0
+  },
+  {
+    "file": "EC2_split_overbilling_evergreen.pdf",
+    "group": "edge",
+    "title": "Third split invoice exceeds PO balance",
+    "blurb": "Evergreen's 3rd invoice on a 3-month PO adds an unplanned ₹40,000 deep-clean. Cumulative billing would exceed the PO.",
+    "expected": "NEEDS_REVIEW",
+    "vendor": "Evergreen Facility Services",
+    "gross": 147500.0
+  },
+  {
+    "file": "EC3_bank_change_apex_supplies.pdf",
+    "group": "edge",
+    "title": "Perfect match, but bank account changed",
+    "blurb": "Everything matches PO-2026-0107 — but the remittance account differs from the vendor master. Classic payment-fraud pattern.",
+    "expected": "NEEDS_REVIEW",
+    "vendor": "Apex Office Solutions Pvt Ltd",
+    "gross": 305620.0
+  },
+  {
+    "file": "EC4_duplicate_brightline_resent.pdf",
+    "group": "edge",
+    "title": "Already-paid invoice re-sent in a new format",
+    "blurb": "Brightline re-sends October's invoice as a 'payment reminder' with a new date and the number written BLL/2026/0458.",
+    "expected": "REJECTED",
+    "vendor": "Brightline Logistics LLP",
+    "gross": 198240.0
+  },
+  {
+    "file": "X1_price_over_tolerance_apex_keyboards.pdf",
+    "group": "more",
+    "title": "Unit price 10% above PO",
+    "blurb": "Apex bills keyboards at ₹2,650 against ₹2,400 on PO-2026-0108.",
+    "expected": "NEEDS_REVIEW",
+    "vendor": "Apex Office Solutions Pvt Ltd",
+    "gross": 110625.0
+  },
+  {
+    "file": "X2_tax_inclusive_delta_switches.pdf",
+    "group": "more",
+    "title": "Tax embedded in unit prices",
+    "blurb": "Delta quotes GST-inclusive rates. The process must back out the taxable value before comparing with the PO.",
+    "expected": "APPROVED",
+    "vendor": "Delta Tech Systems Pvt Ltd",
+    "gross": 179360
+  },
+  {
+    "file": "X3_short_receipt_coastal_film.pdf",
+    "group": "more",
+    "title": "Billed for more than was received",
+    "blurb": "Coastal bills 200 rolls of stretch film; the warehouse has only received 150 (3-way match).",
+    "expected": "NEEDS_REVIEW",
+    "vendor": "Coastal Packaging Industries",
+    "gross": 153400.0
+  },
+  {
+    "file": "X4_incomplete_math_error_coastal.pdf",
+    "group": "more",
+    "title": "Missing invoice number, total doesn't add up",
+    "blurb": "No bill number and a grand total ₹2,000 higher than the lines plus tax.",
+    "expected": "REJECTED",
+    "vendor": "Coastal Packaging Industries",
+    "gross": 162480.0
+  },
+  {
+    "file": "X5_blocked_vendor_fusion.pdf",
+    "group": "more",
+    "title": "Vendor blocked in procurement",
+    "blurb": "Fusion Print House has a valid PO, but was blocked after failing compliance review.",
+    "expected": "REJECTED",
+    "vendor": "Fusion Print House",
+    "gross": 106200.0
+  },
+  {
+    "file": "X6_unknown_vendor_quickparts.pdf",
+    "group": "more",
+    "title": "Vendor not in the master, no PO",
+    "blurb": "An invoice from a company procurement has never onboarded, with no PO reference.",
+    "expected": "REJECTED",
+    "vendor": "QuickParts Trading Co.",
+    "gross": 106200.0
+  },
+  {
+    "file": "X7_proforma_delta.pdf",
+    "group": "more",
+    "title": "Proforma invoice sent to AP",
+    "blurb": "A proforma (advance quote) is not a payable tax invoice, even though it looks like one.",
+    "expected": "REJECTED",
+    "vendor": "Delta Tech Systems Pvt Ltd",
+    "gross": 339840.0
+  }
+]

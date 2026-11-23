@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice Desk — AI invoice processing</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232B3A8C'/><path d='M9 9h14M9 15h14M9 21h8' stroke='white' stroke-width='3' stroke-linecap='round'/></svg>">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="#/">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7"/><path d="M9 9h14M9 15h14M9 21h8"/></svg></span>
+        <span><strong>Invoice Desk</strong><small>Kestrel Foods · AP</small></span>
+      </a>
+      <nav class="nav" id="nav">
+        <a href="#/" data-route="dashboard">Dashboard</a>
+        <a href="#/process" data-route="process">Process invoices</a>
+        <a href="#/review" data-route="review">Review queue <span class="nav-count" id="nav-review"></span></a>
+        <a href="#/data" data-route="data">Procurement data</a>
+        <a href="#/rules" data-route="rules">Rules</a>
+        <a href="#/how" data-route="how">How it works</a>
+      </nav>
+      <div class="side-foot" id="engine-badge"></div>
+    </aside>
+    <main class="main" id="app" tabindex="-1"></main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

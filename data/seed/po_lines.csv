@@ -1,0 +1,17 @@
+po_number,line_no,item_code,description,qty,uom,unit_price
+PO-2026-0101,1,FUR-CHR-ERG,Ergonomic office chair (mesh back),20,EA,6500
+PO-2026-0101,2,FUR-DSK-STD,Height-adjustable standing desk 1400mm,10,EA,18000
+PO-2026-0101,3,ACC-MON-ARM,Dual monitor arm,20,EA,2200
+PO-2026-0102,1,SVC-FTL-BLR-MAA,FTL freight trip Bengaluru to Chennai (32ft MXL),12,TRIP,42000
+PO-2026-0103,1,PKG-BOX-3PLY,Corrugated box 3-ply 12x10x8 in,5000,EA,18
+PO-2026-0103,2,PKG-BUB-ROLL,Bubble wrap roll 1m x 100m,100,ROLL,450
+PO-2026-0104,1,IT-LAP-5450,Laptop - Dell Latitude 5450 i7/16GB/512GB,8,EA,72000
+PO-2026-0104,2,IT-DCK-WD19S,Docking station Dell WD19S,8,EA,9500
+PO-2026-0105,1,SVC-HK-MONTH,Housekeeping services - monthly (HQ),3,MONTH,85000
+PO-2026-0106,1,PKG-STR-FILM,Stretch film roll 500mm x 23 micron,200,ROLL,650
+PO-2026-0107,1,SUP-TNR-85A,Toner cartridge HP 85A compatible,30,EA,3800
+PO-2026-0107,2,SUP-PPR-A4,A4 copier paper 75gsm (box of 5 reams),100,BOX,1450
+PO-2026-0108,1,IT-KBD-ERG,Ergonomic wireless keyboard,25,EA,2400
+PO-2026-0108,2,IT-MSE-ERG,Ergonomic wireless mouse,25,EA,1100
+PO-2026-0109,1,IT-SW-CBS350,Cisco CBS350-24T managed switch,4,EA,38000
+PO-2026-0110,1,MKT-BRO-A4,Product brochure A4 tri-fold 170gsm,10000,EA,9

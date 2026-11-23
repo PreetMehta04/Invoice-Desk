@@ -1,0 +1,11 @@
+po_number,vendor_id,po_date,po_type,description,requester,department,status
+PO-2026-0101,V001,2026-10-06,goods,Ergonomic furniture for 2nd floor expansion,Ritika Menon,Admin,open
+PO-2026-0102,V002,2026-09-25,service,Blanket PO — FTL freight Bengaluru to Chennai (Q3–Q4),Arjun Rao,Supply Chain,open
+PO-2026-0103,V003,2026-10-14,goods,Secondary packaging — Diwali gift boxes,Arjun Rao,Supply Chain,open
+PO-2026-0104,V004,2026-10-20,goods,Laptops and docks for new finance hires,Neha Kulkarni,IT,open
+PO-2026-0105,V005,2026-08-28,service,Housekeeping services Sep–Nov 2026 (HQ),Ritika Menon,Admin,open
+PO-2026-0106,V003,2026-10-28,goods,Pallet stretch film,Arjun Rao,Supply Chain,open
+PO-2026-0107,V001,2026-10-30,goods,Printer consumables and paper,Ritika Menon,Admin,open
+PO-2026-0108,V001,2026-11-02,goods,Keyboards and mice — replacement cycle,Neha Kulkarni,IT,open
+PO-2026-0109,V004,2026-11-03,goods,Managed switches — warehouse network,Neha Kulkarni,IT,open
+PO-2026-0110,V006,2026-08-18,goods,Product brochures,Kavya Iyer,Marketing,open

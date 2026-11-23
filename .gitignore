@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+data/invoices.db*
+data/rules.json
+data/uploads/
+data/inbox/
+.pytest_cache/
+*.log

@@ -1,0 +1,15 @@
+{
+  "buyer_name": "Kestrel Foods Pvt Ltd",
+  "buyer_gstin": "29AAKCK4821F1ZF",
+  "currency": "INR",
+  "price_tolerance_pct": 2.0,
+  "price_tolerance_abs": 5000,
+  "po_balance_tolerance_abs": 500,
+  "arithmetic_tolerance_abs": 2.0,
+  "auto_approve_limit": 1000000,
+  "po_inference_min_confidence": 0.75,
+  "duplicate_window_days": 10,
+  "max_invoice_age_days": 180,
+  "require_grn_for_goods": true,
+  "stage_delay_ms": 450
+}

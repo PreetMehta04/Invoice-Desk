@@ -1,0 +1,7 @@
+vendor_id,name,aliases,gstin,status,status_reason,bank_name,bank_account,ifsc,payment_terms_days,email,category
+V001,Apex Office Solutions Pvt Ltd,Apex Office Solutions|Apex Office,29AAECA4521K1ZN,approved,,HDFC Bank,50200012345678,HDFC0001234,30,billing@apexoffice.in,Office furniture & supplies
+V002,Brightline Logistics LLP,Brightline Logistics|Brightline,27AAJFB7788M1ZK,approved,,Axis Bank,917020045566771,UTIB0000412,15,accounts@brightline.co.in,Freight & logistics
+V003,Coastal Packaging Industries,Coastal Packaging|CPI,33AABCC9012P1ZL,approved,,Indian Bank,6754321098,IDIB000C051,45,ar@coastalpack.in,Packaging material
+V004,Delta Tech Systems Pvt Ltd,Delta Tech Systems|Delta Tech,29AADCD3344Q1Z6,approved,,ICICI Bank,000405112233,ICIC0000004,30,finance@deltatech.in,IT hardware
+V005,Evergreen Facility Services,Evergreen Facility|Evergreen FS,29AAGFE5566R1ZI,approved,,State Bank of India,38812345670,SBIN0040123,15,billing@evergreenfs.in,Facility management
+V006,Fusion Print House,Fusion Print|Fusion Printers,29AAHFF7788S1Z2,blocked,GST registration cancelled — failed annual vendor compliance review (Sep 2026),Canara Bank,0412101009988,CNRB0000412,30,hello@fusionprint.in,Printing
