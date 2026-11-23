@@ -125,3 +125,49 @@ def test_api_auth_endpoints_and_protected_routes():
     # Token should now be invalid
     r_after = client.get("/api/runs", headers={"Authorization": f"Bearer {new_token}"})
     assert r_after.status_code == 401
+
+
+def test_user_data_isolation():
+    client = TestClient(app)
+
+    # 1. Register User A (Alice)
+    r_alice = client.post("/api/auth/signup", json={
+        "name": "Alice", "email": "alice.isolated@kestrel.com", "password": "Password@123", "confirm_password": "Password@123"
+    })
+    token_alice = r_alice.json()["token"]
+    h_alice = {"Authorization": f"Bearer {token_alice}"}
+
+    # 2. Register User B (Bob) - a completely new user
+    r_bob = client.post("/api/auth/signup", json={
+        "name": "Bob", "email": "bob.isolated@kestrel.com", "password": "Password@123", "confirm_password": "Password@123"
+    })
+    token_bob = r_bob.json()["token"]
+    h_bob = {"Authorization": f"Bearer {token_bob}"}
+
+    # New user Bob starts completely from 0
+    stats_bob = client.get("/api/stats", headers=h_bob).json()
+    assert stats_bob["total"] == 0
+    assert stats_bob["completed"] == 0
+    assert stats_bob["value_processed"] == 0
+    assert client.get("/api/runs", headers=h_bob).json() == []
+
+    # Alice runs a sample invoice
+    r_run = client.post("/api/samples/01_happy_apex_furniture.pdf/run", headers=h_alice)
+    assert r_run.status_code == 200
+    alice_run_id = r_run.json()["run_id"]
+
+    # Alice now has 1 run
+    stats_alice = client.get("/api/stats", headers=h_alice).json()
+    assert stats_alice["total"] == 1
+    alice_runs = client.get("/api/runs", headers=h_alice).json()
+    assert len(alice_runs) == 1
+    assert alice_runs[0]["id"] == alice_run_id
+
+    # Bob STILL has 0 runs — completely isolated!
+    stats_bob_after = client.get("/api/stats", headers=h_bob).json()
+    assert stats_bob_after["total"] == 0
+    assert client.get("/api/runs", headers=h_bob).json() == []
+
+    # Bob cannot view or fetch Alice's run
+    r_unauthorized = client.get(f"/api/runs/{alice_run_id}", headers=h_bob)
+    assert r_unauthorized.status_code == 404

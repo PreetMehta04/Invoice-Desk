@@ -152,14 +152,14 @@ def health():
 
 
 # ------------------------------------------------------------------------------------------------ runs
-def _start(data: bytes, filename: str, source: str):
+def _start(data: bytes, filename: str, source: str, user_id: str | None = None):
     if not data:
         raise HTTPException(400, "Empty file")
     if len(data) > MAX_BYTES:
         raise HTTPException(413, "File larger than 15 MB")
     if not data[:5] == b"%PDF-":
         raise HTTPException(415, f"{filename} is not a PDF")
-    run_id = pipeline.create_run(data, filename, source)
+    run_id = pipeline.create_run(data, filename, source, user_id=user_id)
     pipeline.start_run(run_id)
     return run_id
 
@@ -169,7 +169,7 @@ async def upload(files: list[UploadFile] = File(...), current_user: dict = Depen
     ids, errors = [], []
     for f in files:
         try:
-            ids.append(_start(await f.read(), f.filename or "invoice.pdf", "upload"))
+            ids.append(_start(await f.read(), f.filename or "invoice.pdf", "upload", user_id=current_user["id"]))
         except HTTPException as e:
             errors.append({"file": f.filename, "error": e.detail})
     if not ids:
@@ -198,19 +198,20 @@ def sample_file(name: str, current_user: dict = Depends(get_current_user)):
 def run_sample(name: str, current_user: dict = Depends(get_current_user)):
     if name not in {m["file"] for m in _manifest()}:
         raise HTTPException(404, "Unknown sample")
-    return {"run_id": _start((config.SAMPLES_DIR / name).read_bytes(), name, "sample")}
+    return {"run_id": _start((config.SAMPLES_DIR / name).read_bytes(), name, "sample", user_id=current_user["id"])}
 
 
 RUN_COLS = ("id, filename, source, status, decision, final_decision, headline, route_to, engine, vendor_id, vendor_name, "
-            "invoice_number, po_number, gross_amount, currency, review_status, created_at, completed_at, duration_ms")
+            "invoice_number, po_number, gross_amount, currency, review_status, created_at, completed_at, duration_ms, user_id")
 
 
 @app.get("/api/runs")
 def list_runs(decision: str | None = None, limit: int = 200, current_user: dict = Depends(get_current_user)):
-    sql = f"SELECT {RUN_COLS} FROM runs"
-    params = []
+    user_id = current_user["id"]
+    sql = f"SELECT {RUN_COLS} FROM runs WHERE user_id=?"
+    params = [user_id]
     if decision:
-        sql += " WHERE final_decision=?" if decision != "PENDING_REVIEW" else " WHERE review_status='pending'"
+        sql += " AND final_decision=?" if decision != "PENDING_REVIEW" else " AND review_status='pending'"
         if decision != "PENDING_REVIEW":
             params.append(decision)
     sql += " ORDER BY created_at DESC LIMIT ?"
@@ -220,7 +221,8 @@ def list_runs(decision: str | None = None, limit: int = 200, current_user: dict 
 
 @app.get("/api/runs.csv")
 def export_csv(current_user: dict = Depends(get_current_user)):
-    rows = db.q(f"SELECT {RUN_COLS}, reviewer_note FROM runs ORDER BY created_at DESC")
+    user_id = current_user["id"]
+    rows = db.q(f"SELECT {RUN_COLS}, reviewer_note FROM runs WHERE user_id=? ORDER BY created_at DESC", (user_id,))
     buf = io.StringIO()
     if rows:
         w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
@@ -232,7 +234,7 @@ def export_csv(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
-    run = db.q1("SELECT * FROM runs WHERE id=?", (run_id,))
+    run = db.q1("SELECT * FROM runs WHERE id=? AND (user_id=? OR user_id IS NULL)", (run_id, current_user["id"]))
     if not run:
         raise HTTPException(404, "Run not found")
     run["extracted"] = json.loads(run.pop("extracted_json") or "null")
@@ -245,7 +247,7 @@ def get_run(run_id: str, current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/runs/{run_id}/file")
 def run_file(run_id: str, current_user: dict = Depends(get_current_user)):
-    run = db.q1("SELECT file_path, filename FROM runs WHERE id=?", (run_id,))
+    run = db.q1("SELECT file_path, filename FROM runs WHERE id=? AND (user_id=? OR user_id IS NULL)", (run_id, current_user["id"]))
     if not run or not Path(run["file_path"]).exists():
         raise HTTPException(404)
     return FileResponse(run["file_path"], media_type="application/pdf",
@@ -254,7 +256,7 @@ def run_file(run_id: str, current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/runs/{run_id}/output.json")
 def run_output(run_id: str, current_user: dict = Depends(get_current_user)):
-    run = db.q1("SELECT result_json FROM runs WHERE id=?", (run_id,))
+    run = db.q1("SELECT result_json FROM runs WHERE id=? AND (user_id=? OR user_id IS NULL)", (run_id, current_user["id"]))
     if not run or not run["result_json"]:
         raise HTTPException(404, "No output yet")
     return Response(run["result_json"], media_type="application/json",
@@ -264,7 +266,7 @@ def run_output(run_id: str, current_user: dict = Depends(get_current_user)):
 @app.get("/api/runs/{run_id}/events")
 async def run_events(run_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """SSE stream. Replays persisted events, then pushes new ones until the run completes."""
-    if not db.q1("SELECT id FROM runs WHERE id=?", (run_id,)):
+    if not db.q1("SELECT id FROM runs WHERE id=? AND (user_id=? OR user_id IS NULL)", (run_id, current_user["id"])):
         raise HTTPException(404)
 
     async def gen():
@@ -293,6 +295,9 @@ async def run_events(run_id: str, request: Request, current_user: dict = Depends
 
 @app.post("/api/runs/{run_id}/review")
 async def review(run_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+    run = db.q1("SELECT id FROM runs WHERE id=? AND (user_id=? OR user_id IS NULL)", (run_id, current_user["id"]))
+    if not run:
+        raise HTTPException(404, "Run not found")
     body = await request.json()
     try:
         reviewer_name = body.get("reviewer") or f"{current_user['name']} ({current_user['role']})"
@@ -305,7 +310,8 @@ async def review(run_id: str, request: Request, current_user: dict = Depends(get
 # ------------------------------------------------------------------------------------------------ dashboard data
 @app.get("/api/stats")
 def stats(current_user: dict = Depends(get_current_user)):
-    runs = db.q("SELECT final_decision, decision, gross_amount, duration_ms, review_status, result_json, status FROM runs")
+    user_id = current_user["id"]
+    runs = db.q("SELECT final_decision, decision, gross_amount, duration_ms, review_status, result_json, status FROM runs WHERE user_id=?", (user_id,))
     done = [r for r in runs if r["status"] == "completed"]
     by = {k: sum(1 for r in done if r["final_decision"] == k) for k in ("APPROVED", "NEEDS_REVIEW", "REJECTED")}
     stp = sum(1 for r in done if r["decision"] == "APPROVED")
@@ -335,11 +341,12 @@ def stats(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/procurement")
 def procurement(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     return {
         "vendors": db.vendors(),
-        "pos": db.all_pos(),
+        "pos": db.all_pos(user_id=user_id),
         "grns": db.q("SELECT * FROM goods_receipts ORDER BY grn_number, line_no"),
-        "ledger": db.q("SELECT * FROM ap_ledger ORDER BY created_at DESC, invoice_date DESC"),
+        "ledger": db.q("SELECT * FROM ap_ledger WHERE (user_id=? OR user_id IS NULL) ORDER BY created_at DESC, invoice_date DESC", (user_id,)),
     }
 
 
@@ -355,14 +362,18 @@ async def put_rules(request: Request, current_user: dict = Depends(get_current_u
 
 @app.post("/api/reset")
 def reset(current_user: dict = Depends(get_current_user)):
-    """Restore procurement data, AP ledger and rules to the seeded state and clear run history (for demos)."""
-    if any(events.is_live(r["id"]) for r in db.q("SELECT id FROM runs WHERE status IN ('queued','running')")):
+    """Reset current user's runs and ledger entries back to clean 0 state."""
+    user_id = current_user["id"]
+    running = db.q("SELECT id FROM runs WHERE status IN ('queued','running') AND user_id=?", (user_id,))
+    if any(events.is_live(r["id"]) for r in running):
         raise HTTPException(409, "Wait for running invoices to finish")
-    db.init_db(reset=True)
-    auth.seed_default_user()
-    config.reset_rules()
-    for f in config.UPLOAD_DIR.glob("*.pdf"):
-        f.unlink(missing_ok=True)
+    user_runs = db.q("SELECT file_path FROM runs WHERE user_id=?", (user_id,))
+    for r in user_runs:
+        if r.get("file_path"):
+            Path(r["file_path"]).unlink(missing_ok=True)
+    db.execute("DELETE FROM runs WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM ap_ledger WHERE user_id=?", (user_id,))
+    return {"ok": True}
     return {"ok": True}
 
 

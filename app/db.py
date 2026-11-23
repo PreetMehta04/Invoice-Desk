@@ -26,17 +26,19 @@ CREATE TABLE IF NOT EXISTS ap_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_number TEXT, invoice_number_norm TEXT, vendor_id TEXT,
   invoice_date TEXT, po_number TEXT, net_amount REAL, tax_amount REAL, gross_amount REAL, status TEXT,
   paid_date TEXT, service_period TEXT, source TEXT, run_id TEXT, file_hash TEXT, lines_json TEXT,
-  created_at TEXT DEFAULT (datetime('now')));
+  created_at TEXT DEFAULT (datetime('now')), user_id TEXT);
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY, filename TEXT, file_path TEXT, file_hash TEXT, source TEXT, status TEXT,
   decision TEXT, final_decision TEXT, headline TEXT, route_to TEXT, engine TEXT,
   vendor_id TEXT, vendor_name TEXT, invoice_number TEXT, po_number TEXT, gross_amount REAL, currency TEXT,
   extracted_json TEXT, result_json TEXT, error TEXT, review_status TEXT, reviewer_note TEXT,
-  created_at TEXT, completed_at TEXT, duration_ms INTEGER);
+  created_at TEXT, completed_at TEXT, duration_ms INTEGER, user_id TEXT);
 CREATE TABLE IF NOT EXISTS run_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, seq INTEGER, ts TEXT, stage TEXT, status TEXT,
   title TEXT, payload_json TEXT);
 CREATE INDEX IF NOT EXISTS ix_events_run ON run_events(run_id, seq);
+CREATE INDEX IF NOT EXISTS ix_runs_user ON runs(user_id);
+CREATE INDEX IF NOT EXISTS ix_ledger_user ON ap_ledger(user_id);
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
   role TEXT DEFAULT 'AP Reviewer', created_at TEXT DEFAULT (datetime('now')));
@@ -105,6 +107,12 @@ def init_db(reset: bool = False):
         if "pw_hash" in cols and "password_hash" not in cols:
             c.execute("DROP TABLE IF EXISTS sessions")
             c.execute("DROP TABLE IF EXISTS users")
+        run_cols = [r[1] for r in c.execute("PRAGMA table_info(runs)").fetchall()]
+        if run_cols and "user_id" not in run_cols:
+            c.execute("ALTER TABLE runs ADD COLUMN user_id TEXT")
+        ledger_cols = [r[1] for r in c.execute("PRAGMA table_info(ap_ledger)").fetchall()]
+        if ledger_cols and "user_id" not in ledger_cols:
+            c.execute("ALTER TABLE ap_ledger ADD COLUMN user_id TEXT")
         c.executescript(SCHEMA)
         if c.execute("SELECT COUNT(*) FROM vendors").fetchone()[0] == 0:
             _seed(c)
@@ -142,15 +150,20 @@ def vendors():
     return q("SELECT * FROM vendors ORDER BY vendor_id")
 
 
-def po_with_lines(po_number):
+def po_with_lines(po_number, user_id=None):
     po = q1("SELECT * FROM purchase_orders WHERE po_number=?", (po_number,))
     if not po:
         return None
     po["lines"] = q("SELECT * FROM po_lines WHERE po_number=? ORDER BY line_no", (po_number,))
     po["total_amount"] = round(sum(l["qty"] * l["unit_price"] for l in po["lines"]), 2)
-    billed = q("""SELECT invoice_number, invoice_date, net_amount, gross_amount, status, service_period, lines_json
-                  FROM ap_ledger WHERE po_number=? AND status IN ('paid','approved') ORDER BY invoice_date""",
-               (po_number,))
+    if user_id:
+        billed = q("""SELECT invoice_number, invoice_date, net_amount, gross_amount, status, service_period, lines_json
+                      FROM ap_ledger WHERE po_number=? AND status IN ('paid','approved') AND (user_id=? OR user_id IS NULL) ORDER BY invoice_date""",
+                   (po_number, user_id))
+    else:
+        billed = q("""SELECT invoice_number, invoice_date, net_amount, gross_amount, status, service_period, lines_json
+                      FROM ap_ledger WHERE po_number=? AND status IN ('paid','approved') ORDER BY invoice_date""",
+                   (po_number,))
     po["invoices"] = billed
     po["billed_net"] = round(sum(b["net_amount"] for b in billed), 2)
     po["remaining_net"] = round(po["total_amount"] - po["billed_net"], 2)
@@ -172,5 +185,5 @@ def po_with_lines(po_number):
     return po
 
 
-def all_pos():
-    return [po_with_lines(p["po_number"]) for p in q("SELECT po_number FROM purchase_orders ORDER BY po_number")]
+def all_pos(user_id=None):
+    return [po_with_lines(p["po_number"], user_id=user_id) for p in q("SELECT po_number FROM purchase_orders ORDER BY po_number")]

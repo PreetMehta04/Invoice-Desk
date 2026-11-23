@@ -117,14 +117,14 @@ class Check(dict):
 
 
 # ======================================================================================================== run entry
-def create_run(file_bytes: bytes, filename: str, source: str = "upload") -> str:
+def create_run(file_bytes: bytes, filename: str, source: str = "upload", user_id: str | None = None) -> str:
     run_id = datetime.now().strftime("R%y%m%d-%H%M%S-") + uuid.uuid4().hex[:4].upper()
     path = config.UPLOAD_DIR / f"{run_id}.pdf"
     path.write_bytes(file_bytes)
-    db.execute("""INSERT INTO runs (id, filename, file_path, file_hash, source, status, created_at, currency)
-                  VALUES (?,?,?,?,?,?,?,?)""",
+    db.execute("""INSERT INTO runs (id, filename, file_path, file_hash, source, status, created_at, currency, user_id)
+                  VALUES (?,?,?,?,?,?,?,?,?)""",
                (run_id, filename, str(path), hashlib.sha256(file_bytes).hexdigest(), source, "queued",
-                events.now_iso(), "INR"))
+                events.now_iso(), "INR", user_id))
     events.start(run_id)
     return run_id
 
@@ -139,6 +139,7 @@ def execute_run(run_id: str):
     run = db.q1("SELECT * FROM runs WHERE id=?", (run_id,))
     rules = config.load_rules()
     ctx = {"run_id": run_id, "rules": rules, "filename": run["filename"], "file_hash": run["file_hash"],
+           "user_id": run.get("user_id"),
            "pdf": open(run["file_path"], "rb").read(), "checks": [], "t0": time.time()}
     db.execute("UPDATE runs SET status='running' WHERE id=?", (run_id,))
     events.emit(run_id, "run", "running", "Run started", {"filename": run["filename"], "source": run["source"],
@@ -484,8 +485,12 @@ def stage_vendor(ctx):
 def stage_duplicate(ctx):
     ex, rules, add = ctx["extracted"], ctx["rules"], ctx["checks"].append
     vendor = ctx.get("vendor")
+    uid = ctx.get("user_id")
     hits = []
-    same_file = db.q1("SELECT * FROM ap_ledger WHERE file_hash=? AND status IN ('paid','approved','in_review')", (ctx["file_hash"],))
+    if uid:
+        same_file = db.q1("SELECT * FROM ap_ledger WHERE file_hash=? AND status IN ('paid','approved','in_review') AND (user_id=? OR user_id IS NULL)", (ctx["file_hash"], uid))
+    else:
+        same_file = db.q1("SELECT * FROM ap_ledger WHERE file_hash=? AND status IN ('paid','approved','in_review')", (ctx["file_hash"],))
     if same_file:
         add(Check("dup_file", "File not seen before", "fail",
                   f"This exact file was already processed as {same_file['invoice_number']} (status: {same_file['status']}).",
@@ -497,7 +502,10 @@ def stage_duplicate(ctx):
         add(Check("dup_number", "Invoice number unique for vendor", "info", "Skipped — vendor unknown."))
         return "Duplicate check limited (unknown vendor)", {}
     norm = db.norm_invoice_number(ex.get("invoice_number"))
-    prior = db.q("SELECT * FROM ap_ledger WHERE vendor_id=? AND status IN ('paid','approved','in_review')", (vendor["vendor_id"],))
+    if uid:
+        prior = db.q("SELECT * FROM ap_ledger WHERE vendor_id=? AND status IN ('paid','approved','in_review') AND (user_id=? OR user_id IS NULL)", (vendor["vendor_id"], uid))
+    else:
+        prior = db.q("SELECT * FROM ap_ledger WHERE vendor_id=? AND status IN ('paid','approved','in_review')", (vendor["vendor_id"],))
     exact = [p for p in prior if norm and p["invoice_number_norm"] == norm]
     if exact:
         p = exact[0]
@@ -603,8 +611,9 @@ def stage_match(ctx):
     printed = ex.get("po_number")
     po_no = norm_po(printed)
     po, how, candidates = None, None, []
+    uid = ctx.get("user_id")
     if po_no:
-        po = db.po_with_lines(po_no)
+        po = db.po_with_lines(po_no, user_id=uid)
         if po and po["vendor_id"] != vendor["vendor_id"]:
             add(Check("po_vendor", "PO belongs to this vendor", "warn",
                       f"{po_no} was raised on {po['vendor_id']}, not {vendor['vendor_id']}.", "review", "buyer"))
@@ -615,7 +624,7 @@ def stage_match(ctx):
                       "review", "buyer"))
     if not po:
         # infer from the vendor's open POs
-        open_pos = [db.po_with_lines(p["po_number"]) for p in
+        open_pos = [db.po_with_lines(p["po_number"], user_id=uid) for p in
                     db.q("SELECT po_number FROM purchase_orders WHERE vendor_id=? AND status='open'", (vendor["vendor_id"],))]
         for cand in open_pos:
             s, _ = score_po(ex, cand, net)
@@ -625,7 +634,7 @@ def stage_match(ctx):
         top = candidates[0] if candidates else None
         second = candidates[1]["score"] if len(candidates) > 1 else 0
         if top and top["score"] >= rules["po_inference_min_confidence"] and top["score"] - second >= 0.15:
-            po = db.po_with_lines(top["po_number"])
+            po = db.po_with_lines(top["po_number"], user_id=uid)
             how = f"inferred ({top['score'] * 100:.0f}% confidence)"
             ref = ex.get("other_references")
             add(Check("po_found", "Purchase order identified", "pass",
@@ -832,18 +841,18 @@ def stage_post(ctx):
     status_map = {"APPROVED": "approved", "NEEDS_REVIEW": "in_review"}
     if d["decision"] in status_map and vendor:
         db.execute("""INSERT INTO ap_ledger (invoice_number, invoice_number_norm, vendor_id, invoice_date, po_number, net_amount,
-                      tax_amount, gross_amount, status, service_period, source, run_id, file_hash, lines_json)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      tax_amount, gross_amount, status, service_period, source, run_id, file_hash, lines_json, user_id)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                    (ex.get("invoice_number"), db.norm_invoice_number(ex.get("invoice_number")), vendor["vendor_id"],
                     ex.get("invoice_date"), (po or {}).get("po_number"), ctx["net"], ex.get("tax_total") or 0, ex.get("total"),
                     status_map[d["decision"]], ex.get("service_period"), "run", ctx["run_id"], ctx["file_hash"],
-                    json.dumps(ctx.get("allocations", []))))
+                    json.dumps(ctx.get("allocations", [])), ctx.get("user_id")))
     if d["decision"] == "APPROVED":
         actions.append({"type": "ledger", "text": f"Posted to AP ledger against {po['po_number']} — taxable {inr(ctx['net'])}, "
                                                   f"GST {inr(ex.get('tax_total'))}"})
         actions.append({"type": "payment", "text": f"Scheduled in payment run on {d['due_date']} (Net {d['payment_terms_days']}) to verified "
                                                    f"account {vendor['bank_name']} ••••{vendor['bank_account'][-4:]}"})
-        p2 = db.po_with_lines(po["po_number"])
+        p2 = db.po_with_lines(po["po_number"], user_id=ctx.get("user_id"))
         actions.append({"type": "po", "text": f"{po['po_number']} now {p2['billed_net'] / p2['total_amount'] * 100:.0f}% billed "
                                               f"({inr(p2['remaining_net'])} remaining)"})
         add(Check("posted", "Posted", "pass", "Ledger updated"))
