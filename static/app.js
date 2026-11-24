@@ -757,7 +757,7 @@ function showAuthScreen(initialMode = "login", initialError = "") {
             <svg viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#2B3A8C"/><path d="M9 9h14M9 15h14M9 21h8" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>
           </span>
           <h1>Invoice Desk</h1>
-          <p>Kestrel Foods · Accounts Payable Portal</p>
+          <p>Accounts Payable Portal</p>
         </div>
 
         <div class="auth-tabs" role="tablist">
@@ -771,7 +771,7 @@ function showAuthScreen(initialMode = "login", initialError = "") {
           <form class="auth-form" id="form-auth">
             <div class="auth-field">
               <label for="auth-email">Work Email</label>
-              <input id="auth-email" type="email" placeholder="name@kestrel.com" required autocomplete="username" />
+              <input id="auth-email" type="email" placeholder="name@company.com" required autocomplete="username" />
             </div>
             <div class="auth-field">
               <label for="auth-password">Password</label>
@@ -799,7 +799,7 @@ function showAuthScreen(initialMode = "login", initialError = "") {
             </div>
             <div class="auth-field">
               <label for="auth-email">Work Email</label>
-              <input id="auth-email" type="email" placeholder="name@kestrel.com" required autocomplete="email" />
+              <input id="auth-email" type="email" placeholder="name@company.com" required autocomplete="email" />
             </div>
             <div class="auth-field">
               <label for="auth-password">Password</label>
