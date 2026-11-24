@@ -370,9 +370,187 @@ def procurement(current_user: dict = Depends(get_current_user)):
     return {
         "vendors": db.vendors(),
         "pos": db.all_pos(user_id=user_id),
-        "grns": db.q("SELECT * FROM goods_receipts ORDER BY grn_number, line_no"),
+        "grns": db.q("SELECT rowid AS id, * FROM goods_receipts ORDER BY grn_number, line_no"),
         "ledger": db.q("SELECT * FROM ap_ledger WHERE (user_id=? OR user_id IS NULL) ORDER BY created_at DESC, invoice_date DESC", (user_id,)),
     }
+
+
+# ------------------------------------------------------------------------------------------------ procurement CRUD
+@app.post("/api/procurement/vendors")
+async def create_vendor(request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    vid = (b.get("vendor_id") or "").strip().upper()
+    if not vid:
+        raise HTTPException(400, "Vendor ID is required")
+    if db.q1("SELECT vendor_id FROM vendors WHERE vendor_id=?", (vid,)):
+        raise HTTPException(400, f"Vendor {vid} already exists")
+    db.execute(
+        """INSERT INTO vendors (vendor_id, name, aliases, gstin, status, status_reason, bank_name, bank_account, ifsc, payment_terms_days, email, category)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (vid, b.get("name") or "", b.get("aliases") or "", (b.get("gstin") or "").strip().upper(),
+         b.get("status") or "approved", b.get("status_reason") or "", b.get("bank_name") or "",
+         b.get("bank_account") or "", (b.get("ifsc") or "").strip().upper(),
+         int(b.get("payment_terms_days") or 30), b.get("email") or "", b.get("category") or "")
+    )
+    return {"ok": True, "vendor_id": vid}
+
+
+@app.put("/api/procurement/vendors/{vendor_id}")
+async def update_vendor(vendor_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    if not db.q1("SELECT vendor_id FROM vendors WHERE vendor_id=?", (vendor_id,)):
+        raise HTTPException(404, "Vendor not found")
+    db.execute(
+        """UPDATE vendors SET name=?, aliases=?, gstin=?, status=?, status_reason=?, bank_name=?, bank_account=?, ifsc=?, payment_terms_days=?, email=?, category=?
+           WHERE vendor_id=?""",
+        (b.get("name") or "", b.get("aliases") or "", (b.get("gstin") or "").strip().upper(),
+         b.get("status") or "approved", b.get("status_reason") or "", b.get("bank_name") or "",
+         b.get("bank_account") or "", (b.get("ifsc") or "").strip().upper(),
+         int(b.get("payment_terms_days") or 30), b.get("email") or "", b.get("category") or "", vendor_id)
+    )
+    return {"ok": True, "vendor_id": vendor_id}
+
+
+@app.delete("/api/procurement/vendors/{vendor_id}")
+def delete_vendor(vendor_id: str, current_user: dict = Depends(get_current_user)):
+    if not db.q1("SELECT vendor_id FROM vendors WHERE vendor_id=?", (vendor_id,)):
+        raise HTTPException(404, "Vendor not found")
+    db.execute("DELETE FROM vendors WHERE vendor_id=?", (vendor_id,))
+    return {"ok": True, "vendor_id": vendor_id}
+
+
+@app.post("/api/procurement/pos")
+async def create_po(request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    pno = (b.get("po_number") or "").strip().upper()
+    if not pno:
+        raise HTTPException(400, "PO number is required")
+    if db.q1("SELECT po_number FROM purchase_orders WHERE po_number=?", (pno,)):
+        raise HTTPException(400, f"Purchase order {pno} already exists")
+    db.execute(
+        """INSERT INTO purchase_orders (po_number, vendor_id, po_date, po_type, description, requester, department, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (pno, b.get("vendor_id") or "", b.get("po_date") or "", b.get("po_type") or "goods",
+         b.get("description") or "", b.get("requester") or "", b.get("department") or "", b.get("status") or "open")
+    )
+    lines = b.get("lines") or []
+    for idx, l in enumerate(lines, start=1):
+        db.execute(
+            """INSERT INTO po_lines (po_number, line_no, item_code, description, qty, uom, unit_price)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (pno, int(l.get("line_no") or idx), l.get("item_code") or "", l.get("description") or "",
+             float(l.get("qty") or 1.0), l.get("uom") or "pcs", float(l.get("unit_price") or 0.0))
+        )
+    return {"ok": True, "po_number": pno}
+
+
+@app.put("/api/procurement/pos/{po_number}")
+async def update_po(po_number: str, request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    if not db.q1("SELECT po_number FROM purchase_orders WHERE po_number=?", (po_number,)):
+        raise HTTPException(404, "Purchase order not found")
+    db.execute(
+        """UPDATE purchase_orders SET vendor_id=?, po_date=?, po_type=?, description=?, requester=?, department=?, status=?
+           WHERE po_number=?""",
+        (b.get("vendor_id") or "", b.get("po_date") or "", b.get("po_type") or "goods",
+         b.get("description") or "", b.get("requester") or "", b.get("department") or "", b.get("status") or "open", po_number)
+    )
+    if "lines" in b:
+        db.execute("DELETE FROM po_lines WHERE po_number=?", (po_number,))
+        for idx, l in enumerate(b.get("lines") or [], start=1):
+            db.execute(
+                """INSERT INTO po_lines (po_number, line_no, item_code, description, qty, uom, unit_price)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (po_number, int(l.get("line_no") or idx), l.get("item_code") or "", l.get("description") or "",
+                 float(l.get("qty") or 1.0), l.get("uom") or "pcs", float(l.get("unit_price") or 0.0))
+            )
+    return {"ok": True, "po_number": po_number}
+
+
+@app.delete("/api/procurement/pos/{po_number}")
+def delete_po(po_number: str, current_user: dict = Depends(get_current_user)):
+    if not db.q1("SELECT po_number FROM purchase_orders WHERE po_number=?", (po_number,)):
+        raise HTTPException(404, "Purchase order not found")
+    db.execute("DELETE FROM po_lines WHERE po_number=?", (po_number,))
+    db.execute("DELETE FROM purchase_orders WHERE po_number=?", (po_number,))
+    return {"ok": True, "po_number": po_number}
+
+
+@app.post("/api/procurement/grns")
+async def create_grn(request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    gno = (b.get("grn_number") or "").strip().upper()
+    pno = (b.get("po_number") or "").strip().upper()
+    if not gno or not pno:
+        raise HTTPException(400, "GRN number and PO number are required")
+    rowid = db.execute(
+        """INSERT INTO goods_receipts (grn_number, po_number, line_no, qty_received, received_date, received_by)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (gno, pno, int(b.get("line_no") or 1), float(b.get("qty_received") or 0.0),
+         b.get("received_date") or "", b.get("received_by") or "")
+    )
+    return {"ok": True, "id": rowid}
+
+
+@app.put("/api/procurement/grns/{grn_id}")
+async def update_grn(grn_id: int, request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    db.execute(
+        """UPDATE goods_receipts SET grn_number=?, po_number=?, line_no=?, qty_received=?, received_date=?, received_by=?
+           WHERE rowid=?""",
+        ((b.get("grn_number") or "").strip().upper(), (b.get("po_number") or "").strip().upper(),
+         int(b.get("line_no") or 1), float(b.get("qty_received") or 0.0),
+         b.get("received_date") or "", b.get("received_by") or "", grn_id)
+    )
+    return {"ok": True, "id": grn_id}
+
+
+@app.delete("/api/procurement/grns/{grn_id}")
+def delete_grn(grn_id: int, current_user: dict = Depends(get_current_user)):
+    db.execute("DELETE FROM goods_receipts WHERE rowid=?", (grn_id,))
+    return {"ok": True, "id": grn_id}
+
+
+@app.post("/api/procurement/ledger")
+async def create_ledger(request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    inv_no = (b.get("invoice_number") or "").strip()
+    if not inv_no:
+        raise HTTPException(400, "Invoice number is required")
+    rowid = db.execute(
+        """INSERT INTO ap_ledger (invoice_number, invoice_number_norm, vendor_id, invoice_date, po_number,
+                                 net_amount, tax_amount, gross_amount, status, paid_date, service_period, source, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (inv_no, db.norm_invoice_number(inv_no), b.get("vendor_id") or "", b.get("invoice_date") or "",
+         (b.get("po_number") or "").strip().upper() or None, float(b.get("net_amount") or 0.0),
+         float(b.get("tax_amount") or 0.0), float(b.get("gross_amount") or 0.0),
+         b.get("status") or "approved", b.get("paid_date") or None, b.get("service_period") or None,
+         "manual", current_user["id"])
+    )
+    return {"ok": True, "id": rowid}
+
+
+@app.put("/api/procurement/ledger/{ledger_id}")
+async def update_ledger(ledger_id: int, request: Request, current_user: dict = Depends(get_current_user)):
+    b = await request.json()
+    inv_no = (b.get("invoice_number") or "").strip()
+    db.execute(
+        """UPDATE ap_ledger SET invoice_number=?, invoice_number_norm=?, vendor_id=?, invoice_date=?, po_number=?,
+                                net_amount=?, tax_amount=?, gross_amount=?, status=?, paid_date=?, service_period=?
+           WHERE id=?""",
+        (inv_no, db.norm_invoice_number(inv_no), b.get("vendor_id") or "", b.get("invoice_date") or "",
+         (b.get("po_number") or "").strip().upper() or None, float(b.get("net_amount") or 0.0),
+         float(b.get("tax_amount") or 0.0), float(b.get("gross_amount") or 0.0),
+         b.get("status") or "approved", b.get("paid_date") or None, b.get("service_period") or None, ledger_id)
+    )
+    return {"ok": True, "id": ledger_id}
+
+
+@app.delete("/api/procurement/ledger/{ledger_id}")
+def delete_ledger(ledger_id: int, current_user: dict = Depends(get_current_user)):
+    db.execute("DELETE FROM ap_ledger WHERE id=?", (ledger_id,))
+    return {"ok": True, "id": ledger_id}
+
 
 
 @app.get("/api/rules")

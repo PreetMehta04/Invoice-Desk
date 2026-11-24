@@ -45,6 +45,8 @@ const I = {
   arrow: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8h10M9 4l4 4-4 4"/></svg>',
   dl: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 7L8 10.5 11.5 7M3 13h10"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>',
 };
 const statusIcon = (s) => ({ pass: I.check, warn: I.warn, fail: I.x, info: I.info }[s] || I.info);
@@ -636,41 +638,569 @@ async function renderReview() {
 
 // ------------------------------------------------------------------------------------------- procurement data
 let dataTab = "pos";
+
+function showProcModal({ title, bodyHtml, onSave }) {
+  const existing = $("#proc-modal");
+  if (existing) existing.remove();
+  const m = document.createElement("div");
+  m.id = "proc-modal";
+  m.className = "modal-overlay";
+  m.innerHTML = `
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>${esc(title)}</h3>
+        <button type="button" class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
+      <form id="modal-form">
+        <div class="modal-body">${bodyHtml}</div>
+        <div class="modal-foot">
+          <button type="button" class="btn" id="modal-cancel-btn">Cancel</button>
+          <button type="submit" class="btn primary" id="modal-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(m);
+  const close = () => m.remove();
+  m.querySelector("#modal-close-btn").onclick = close;
+  m.querySelector("#modal-cancel-btn").onclick = close;
+  m.onclick = (e) => { if (e.target === m) close(); };
+  m.querySelector("#modal-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = m.querySelector("#modal-save-btn");
+    btn.disabled = true;
+    try {
+      await onSave(new FormData(e.target), e.target);
+      close();
+      toast("Saved successfully");
+      renderData();
+    } catch (err) {
+      toast(err.message, true);
+      btn.disabled = false;
+    }
+  };
+}
+
+function openVendorModal(v = null) {
+  const isEdit = Boolean(v);
+  showProcModal({
+    title: isEdit ? `Edit Vendor: ${v.vendor_id}` : "Add New Vendor",
+    bodyHtml: `
+      <div class="modal-grid">
+        <div class="modal-field">
+          <label>Vendor ID *</label>
+          <input name="vendor_id" value="${esc(v?.vendor_id || "")}" placeholder="e.g. VEND-007" required ${isEdit ? "readonly style='background:#f1f5f9'" : ""}>
+        </div>
+        <div class="modal-field">
+          <label>Vendor Legal Name *</label>
+          <input name="name" value="${esc(v?.name || "")}" placeholder="Legal company name" required>
+        </div>
+        <div class="modal-field">
+          <label>Category</label>
+          <input name="category" value="${esc(v?.category || "")}" placeholder="e.g. IT Equipment, Logistics">
+        </div>
+        <div class="modal-field">
+          <label>GSTIN</label>
+          <input name="gstin" value="${esc(v?.gstin || "")}" placeholder="15-character GSTIN">
+        </div>
+        <div class="modal-field">
+          <label>Status</label>
+          <select name="status">
+            <option value="approved" ${v?.status === "approved" ? "selected" : ""}>Approved</option>
+            <option value="blocked" ${v?.status === "blocked" ? "selected" : ""}>Blocked</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label>Status Reason (if blocked)</label>
+          <input name="status_reason" value="${esc(v?.status_reason || "")}" placeholder="e.g. Quality audit failure">
+        </div>
+        <div class="modal-field">
+          <label>Bank Name</label>
+          <input name="bank_name" value="${esc(v?.bank_name || "")}" placeholder="Bank name">
+        </div>
+        <div class="modal-field">
+          <label>Bank Account Number</label>
+          <input name="bank_account" value="${esc(v?.bank_account || "")}" placeholder="Account number">
+        </div>
+        <div class="modal-field">
+          <label>IFSC Code</label>
+          <input name="ifsc" value="${esc(v?.ifsc || "")}" placeholder="11-character IFSC">
+        </div>
+        <div class="modal-field">
+          <label>Payment Terms (Days)</label>
+          <input type="number" name="payment_terms_days" value="${esc(v?.payment_terms_days ?? 30)}" required>
+        </div>
+        <div class="modal-field span-2">
+          <label>Contact Email</label>
+          <input type="email" name="email" value="${esc(v?.email || "")}" placeholder="billing@vendor.com">
+        </div>
+        <div class="modal-field span-2">
+          <label>Trade Aliases / Names (comma separated)</label>
+          <input name="aliases" value="${esc(v?.aliases || "")}" placeholder="Known trading aliases">
+        </div>
+      </div>
+    `,
+    onSave: async (fd) => {
+      const payload = Object.fromEntries(fd.entries());
+      if (isEdit) {
+        await api(`/api/procurement/vendors/${encodeURIComponent(v.vendor_id)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        await api("/api/procurement/vendors", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+    }
+  });
+}
+
+function openPoModal(po = null, vendors = []) {
+  const isEdit = Boolean(po);
+  const vOpts = vendors.map((v) => `<option value="${esc(v.vendor_id)}" ${po?.vendor_id === v.vendor_id ? "selected" : ""}>${esc(v.name)} (${esc(v.vendor_id)})</option>`).join("");
+  const lines = po?.lines || [{ line_no: 1, item_code: "", description: "", qty: 1, uom: "pcs", unit_price: 100 }];
+  showProcModal({
+    title: isEdit ? `Edit Purchase Order: ${po.po_number}` : "Add Purchase Order",
+    bodyHtml: `
+      <div class="modal-grid">
+        <div class="modal-field">
+          <label>PO Number *</label>
+          <input name="po_number" value="${esc(po?.po_number || "")}" placeholder="e.g. PO-2026-0199" required ${isEdit ? "readonly style='background:#f1f5f9'" : ""}>
+        </div>
+        <div class="modal-field">
+          <label>Vendor *</label>
+          <select name="vendor_id" required>${vOpts}</select>
+        </div>
+        <div class="modal-field">
+          <label>PO Type</label>
+          <select name="po_type">
+            <option value="goods" ${po?.po_type === "goods" ? "selected" : ""}>Goods (3-way match)</option>
+            <option value="services" ${po?.po_type === "services" ? "selected" : ""}>Services (2-way match)</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label>Status</label>
+          <select name="status">
+            <option value="open" ${po?.status === "open" ? "selected" : ""}>Open</option>
+            <option value="closed" ${po?.status === "closed" ? "selected" : ""}>Closed</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label>PO Date</label>
+          <input type="date" name="po_date" value="${esc(po?.po_date || new Date().toISOString().slice(0, 10))}">
+        </div>
+        <div class="modal-field">
+          <label>Requester</label>
+          <input name="requester" value="${esc(po?.requester || "")}" placeholder="Requester name">
+        </div>
+        <div class="modal-field span-2">
+          <label>Description *</label>
+          <input name="description" value="${esc(po?.description || "")}" placeholder="Summary of purchase order" required>
+        </div>
+        <div class="modal-field span-2">
+          <label>Department</label>
+          <input name="department" value="${esc(po?.department || "")}" placeholder="e.g. Supply Chain, Operations">
+        </div>
+        <div class="modal-field span-2" style="border-top: 1px solid var(--rule); padding-top: 10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label style="margin:0">PO Line Items</label>
+            <button type="button" class="btn sm" id="btn-add-line">${I.plus} Add line</button>
+          </div>
+          <table class="grid" id="po-lines-table">
+            <thead><tr><th>#</th><th>Description</th><th>Item code</th><th class="num">Qty</th><th>UOM</th><th class="num">Unit Price (₹)</th><th style="width:30px"></th></tr></thead>
+            <tbody>
+              ${lines.map((l, i) => `<tr>
+                <td><input type="number" name="line_no" value="${l.line_no || i + 1}" style="width:45px;padding:4px" required></td>
+                <td><input type="text" name="line_desc" value="${esc(l.description)}" placeholder="Item description" style="padding:4px" required></td>
+                <td><input type="text" name="line_code" value="${esc(l.item_code || "")}" placeholder="Code" style="width:70px;padding:4px"></td>
+                <td><input type="number" step="any" name="line_qty" value="${l.qty}" style="width:60px;padding:4px;text-align:right" required></td>
+                <td><input type="text" name="line_uom" value="${esc(l.uom || "pcs")}" style="width:50px;padding:4px"></td>
+                <td><input type="number" step="any" name="line_price" value="${l.unit_price}" style="width:80px;padding:4px;text-align:right" required></td>
+                <td><button type="button" class="btn-icon-del" onclick="this.closest('tr').remove()">${I.trash}</button></td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `,
+    onSave: async (fd, form) => {
+      const pno = fd.get("po_number").trim().toUpperCase();
+      const rows = Array.from(form.querySelectorAll("#po-lines-table tbody tr"));
+      const lineItems = rows.map((tr) => ({
+        line_no: parseInt(tr.querySelector("[name=line_no]").value, 10),
+        description: tr.querySelector("[name=line_desc]").value.trim(),
+        item_code: tr.querySelector("[name=line_code]").value.trim(),
+        qty: parseFloat(tr.querySelector("[name=line_qty]").value) || 0,
+        uom: tr.querySelector("[name=line_uom]").value.trim() || "pcs",
+        unit_price: parseFloat(tr.querySelector("[name=line_price]").value) || 0
+      }));
+      const payload = {
+        po_number: pno,
+        vendor_id: fd.get("vendor_id"),
+        po_type: fd.get("po_type"),
+        status: fd.get("status"),
+        po_date: fd.get("po_date"),
+        requester: fd.get("requester"),
+        department: fd.get("department"),
+        description: fd.get("description"),
+        lines: lineItems
+      };
+      if (isEdit) {
+        await api(`/api/procurement/pos/${encodeURIComponent(po.po_number)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        await api("/api/procurement/pos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+    }
+  });
+
+  const addBtn = $("#btn-add-line");
+  if (addBtn) {
+    addBtn.onclick = () => {
+      const tbody = $("#po-lines-table tbody");
+      const nextNo = tbody.querySelectorAll("tr").length + 1;
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td><input type="number" name="line_no" value="${nextNo}" style="width:45px;padding:4px" required></td>
+        <td><input type="text" name="line_desc" value="" placeholder="Item description" style="padding:4px" required></td>
+        <td><input type="text" name="line_code" value="" placeholder="Code" style="width:70px;padding:4px"></td>
+        <td><input type="number" step="any" name="line_qty" value="1" style="width:60px;padding:4px;text-align:right" required></td>
+        <td><input type="text" name="line_uom" value="pcs" style="width:50px;padding:4px"></td>
+        <td><input type="number" step="any" name="line_price" value="0" style="width:80px;padding:4px;text-align:right" required></td>
+        <td><button type="button" class="btn-icon-del" onclick="this.closest('tr').remove()">${I.trash}</button></td>
+      `;
+      tbody.appendChild(tr);
+    };
+  }
+}
+
+function openGrnModal(g = null, pos = []) {
+  const isEdit = Boolean(g);
+  const poOpts = pos.map((p) => `<option value="${esc(p.po_number)}" ${g?.po_number === p.po_number ? "selected" : ""}>${esc(p.po_number)} (${esc(p.description)})</option>`).join("");
+  showProcModal({
+    title: isEdit ? `Edit Goods Receipt: ${g.grn_number}` : "Add Goods Receipt (GRN)",
+    bodyHtml: `
+      <div class="modal-grid">
+        <div class="modal-field">
+          <label>GRN Number *</label>
+          <input name="grn_number" value="${esc(g?.grn_number || "")}" placeholder="e.g. GRN-2026-0099" required>
+        </div>
+        <div class="modal-field">
+          <label>Purchase Order *</label>
+          <select name="po_number" required>${poOpts}</select>
+        </div>
+        <div class="modal-field">
+          <label>PO Line Number *</label>
+          <input type="number" name="line_no" value="${esc(g?.line_no || 1)}" required>
+        </div>
+        <div class="modal-field">
+          <label>Quantity Received *</label>
+          <input type="number" step="any" name="qty_received" value="${esc(g?.qty_received || 1)}" required>
+        </div>
+        <div class="modal-field">
+          <label>Received Date</label>
+          <input type="date" name="received_date" value="${esc(g?.received_date || new Date().toISOString().slice(0, 10))}">
+        </div>
+        <div class="modal-field">
+          <label>Received By</label>
+          <input name="received_by" value="${esc(g?.received_by || "")}" placeholder="Warehouse staff name">
+        </div>
+      </div>
+    `,
+    onSave: async (fd) => {
+      const payload = Object.fromEntries(fd.entries());
+      payload.line_no = parseInt(payload.line_no, 10);
+      payload.qty_received = parseFloat(payload.qty_received);
+      if (isEdit) {
+        await api(`/api/procurement/grns/${g.id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        await api("/api/procurement/grns", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+    }
+  });
+}
+
+function openLedgerModal(l = null, vendors = [], pos = []) {
+  const isEdit = Boolean(l);
+  const vOpts = vendors.map((v) => `<option value="${esc(v.vendor_id)}" ${l?.vendor_id === v.vendor_id ? "selected" : ""}>${esc(v.name)} (${esc(v.vendor_id)})</option>`).join("");
+  const poOpts = `<option value="">None / Not linked</option>` + pos.map((p) => `<option value="${esc(p.po_number)}" ${l?.po_number === p.po_number ? "selected" : ""}>${esc(p.po_number)} (${esc(p.description)})</option>`).join("");
+  showProcModal({
+    title: isEdit ? `Edit Ledger Invoice: ${l.invoice_number}` : "Add Historical / Ledger Invoice",
+    bodyHtml: `
+      <div class="modal-grid">
+        <div class="modal-field">
+          <label>Invoice Number *</label>
+          <input name="invoice_number" value="${esc(l?.invoice_number || "")}" placeholder="e.g. INV-2026-001" required>
+        </div>
+        <div class="modal-field">
+          <label>Vendor *</label>
+          <select name="vendor_id" required>${vOpts}</select>
+        </div>
+        <div class="modal-field">
+          <label>Invoice Date</label>
+          <input type="date" name="invoice_date" value="${esc(l?.invoice_date || new Date().toISOString().slice(0, 10))}">
+        </div>
+        <div class="modal-field">
+          <label>Purchase Order</label>
+          <select name="po_number">${poOpts}</select>
+        </div>
+        <div class="modal-field">
+          <label>Taxable Net Amount (₹) *</label>
+          <input type="number" step="any" name="net_amount" id="led-net" value="${esc(l?.net_amount ?? "")}" required>
+        </div>
+        <div class="modal-field">
+          <label>Tax Amount (₹)</label>
+          <input type="number" step="any" name="tax_amount" id="led-tax" value="${esc(l?.tax_amount ?? "")}">
+        </div>
+        <div class="modal-field">
+          <label>Gross Total Amount (₹) *</label>
+          <input type="number" step="any" name="gross_amount" id="led-gross" value="${esc(l?.gross_amount ?? "")}" required>
+        </div>
+        <div class="modal-field">
+          <label>Status</label>
+          <select name="status">
+            <option value="approved" ${l?.status === "approved" ? "selected" : ""}>Approved</option>
+            <option value="paid" ${l?.status === "paid" ? "selected" : ""}>Paid</option>
+            <option value="in_review" ${l?.status === "in_review" ? "selected" : ""}>In Review</option>
+            <option value="rejected" ${l?.status === "rejected" ? "selected" : ""}>Rejected</option>
+          </select>
+        </div>
+        <div class="modal-field">
+          <label>Payment Date</label>
+          <input type="date" name="paid_date" value="${esc(l?.paid_date || "")}">
+        </div>
+        <div class="modal-field">
+          <label>Service Period / Notes</label>
+          <input name="service_period" value="${esc(l?.service_period || "")}" placeholder="e.g. October 2026 freight">
+        </div>
+      </div>
+    `,
+    onSave: async (fd) => {
+      const payload = Object.fromEntries(fd.entries());
+      payload.net_amount = parseFloat(payload.net_amount) || 0;
+      payload.tax_amount = parseFloat(payload.tax_amount) || 0;
+      payload.gross_amount = parseFloat(payload.gross_amount) || 0;
+      if (isEdit) {
+        await api(`/api/procurement/ledger/${l.id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      } else {
+        await api("/api/procurement/ledger", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+      }
+    }
+  });
+
+  const netIn = $("#led-net");
+  const taxIn = $("#led-tax");
+  const grossIn = $("#led-gross");
+  const updateGross = () => {
+    const n = parseFloat(netIn.value) || 0;
+    const t = parseFloat(taxIn.value) || 0;
+    if (n && !grossIn.value) grossIn.value = (n + t).toFixed(2);
+  };
+  if (netIn) netIn.oninput = updateGross;
+  if (taxIn) taxIn.oninput = updateGross;
+}
+
 async function renderData() {
   const d = await api("/api/procurement");
   const vmap = Object.fromEntries(d.vendors.map((v) => [v.vendor_id, v.name]));
-  app.innerHTML = `<div class="page-head"><div><h1>Procurement data</h1><p>The system of record the process checks against. Approved invoices update PO billing live.</p></div></div>
-    <div class="panel"><div class="tabs" id="dtabs" style="padding:0 10px">
-      ${[["pos", `Purchase orders (${d.pos.length})`], ["vendors", `Vendors (${d.vendors.length})`], ["grns", "Goods receipts"], ["ledger", `AP ledger (${d.ledger.length})`]]
-        .map(([k, l]) => `<button data-t="${k}" class="${dataTab === k ? "active" : ""}">${l}</button>`).join("")}
-    </div><div id="dbody"></div></div>`;
-  $("#dtabs").onclick = (e) => { const b = e.target.closest("button"); if (b) { dataTab = b.dataset.t; renderData(); } };
+
+  const tabLabels = {
+    pos: "purchase order",
+    vendors: "vendor",
+    grns: "goods receipt",
+    ledger: "ledger invoice",
+  };
+
+  app.innerHTML = `
+    <div class="page-head">
+      <div>
+        <h1>Procurement data</h1>
+        <p>The system of record the process checks against. Add, edit, or delete vendors, POs, receipts, and past ledger invoices.</p>
+      </div>
+      <button class="btn primary" id="btn-add-proc">${I.plus} Add ${tabLabels[dataTab] || "record"}</button>
+    </div>
+    <div class="panel">
+      <div class="tabs" id="dtabs" style="padding:0 10px">
+        ${[["pos", `Purchase orders (${d.pos.length})`], ["vendors", `Vendors (${d.vendors.length})`], ["grns", `Goods receipts (${d.grns.length})`], ["ledger", `AP ledger (${d.ledger.length})`]]
+          .map(([k, l]) => `<button data-t="${k}" class="${dataTab === k ? "active" : ""}">${l}</button>`).join("")}
+      </div>
+      <div id="dbody"></div>
+    </div>`;
+
+  $("#dtabs").onclick = (e) => {
+    const b = e.target.closest("button");
+    if (b) { dataTab = b.dataset.t; renderData(); }
+  };
+
+  $("#btn-add-proc").onclick = () => {
+    if (dataTab === "pos") openPoModal(null, d.vendors);
+    else if (dataTab === "vendors") openVendorModal(null);
+    else if (dataTab === "grns") openGrnModal(null, d.pos);
+    else if (dataTab === "ledger") openLedgerModal(null, d.vendors, d.pos);
+  };
+
   const body = $("#dbody");
   if (dataTab === "pos") {
-    body.innerHTML = d.pos.map((po) => {
+    body.innerHTML = d.pos.length ? d.pos.map((po) => {
       const pct = (po.billed_net / po.total_amount) * 100;
-      return `<details class="po"><summary><strong>${esc(po.po_number)}</strong><span>${esc(po.description)}<div class="sub muted small">${esc(vmap[po.vendor_id])} · ${po.po_type}</div></span>
+      return `<details class="po"><summary>
+        <strong>${esc(po.po_number)}</strong>
+        <span>${esc(po.description)}<div class="sub muted small">${esc(vmap[po.vendor_id] || po.vendor_id)} · ${po.po_type}</div></span>
         <span class="num">${inr(po.total_amount)}<div class="muted small">${inr(po.remaining_net)} left</div></span>
         <span><div class="minibar"><span class="${pct > 100.5 ? "over" : ""}" style="width:${Math.min(100, pct)}%"></span></div><div class="muted small">${pct.toFixed(0)}% billed · ${po.invoices.length} invoice(s)</div></span>
-        <span class="chip plain">${esc(po.status)}</span></summary>
-        <div class="inner"><table class="grid"><thead><tr><th>Line</th><th>Item</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Billed</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>
-          ${po.lines.map((l) => `<tr><td>${l.line_no}</td><td>${esc(l.description)}<div class="sub">${esc(l.item_code)}</div></td><td class="num">${l.qty} ${esc(l.uom)}</td><td class="num">${po.po_type === "goods" ? l.qty_received : "n/a"}</td><td class="num">${l.qty_billed}</td><td class="num">${inr(l.unit_price)}</td><td class="num">${inr(l.amount)}</td></tr>`).join("")}
-        </tbody></table>
-        ${po.invoices.length ? `<p class="small" style="margin-top:8px"><span class="muted">Billed by:</span> ${po.invoices.map((i) => `${esc(i.invoice_number)} (${inr(i.net_amount)}, ${esc(i.status)})`).join(" · ")}</p>` : ""}</div></details>`;
-    }).join("");
+        <span class="chip plain">${esc(po.status)}</span>
+        <span class="table-actions" onclick="event.stopPropagation()">
+          <button class="btn-icon-edit" title="Edit Purchase Order" data-edit-po="${esc(po.po_number)}">${I.edit}</button>
+          <button class="btn-icon-del" title="Delete Purchase Order" data-del-po="${esc(po.po_number)}">${I.trash}</button>
+        </span>
+      </summary>
+      <div class="inner"><table class="grid"><thead><tr><th>Line</th><th>Item</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Billed</th><th class="num">Unit price</th><th class="num">Amount</th></tr></thead><tbody>
+        ${po.lines.map((l) => `<tr><td>${l.line_no}</td><td>${esc(l.description)}<div class="sub">${esc(l.item_code)}</div></td><td class="num">${l.qty} ${esc(l.uom)}</td><td class="num">${po.po_type === "goods" ? l.qty_received : "n/a"}</td><td class="num">${l.qty_billed}</td><td class="num">${inr(l.unit_price)}</td><td class="num">${inr(l.amount)}</td></tr>`).join("")}
+      </tbody></table>
+      ${po.invoices.length ? `<p class="small" style="margin-top:8px"><span class="muted">Billed by:</span> ${po.invoices.map((i) => `${esc(i.invoice_number)} (${inr(i.net_amount)}, ${esc(i.status)})`).join(" · ")}</p>` : ""}</div></details>`;
+    }).join("") : `<div class="empty">No purchase orders found. Click "+ Add purchase order" to create one.</div>`;
+
+    $$("[data-edit-po]").forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const po = d.pos.find((p) => p.po_number === b.dataset.editPo);
+        if (po) openPoModal(po, d.vendors);
+      };
+    });
+
+    $$("[data-del-po]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const pno = b.dataset.delPo;
+        if (!confirm(`Delete purchase order ${pno} and its line items?`)) return;
+        try {
+          await api(`/api/procurement/pos/${encodeURIComponent(pno)}`, { method: "DELETE" });
+          toast(`Deleted PO ${pno}`);
+          renderData();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
+
   } else if (dataTab === "vendors") {
-    body.innerHTML = `<table class="grid"><thead><tr><th>ID</th><th>Vendor</th><th>GSTIN</th><th>Status</th><th>Verified bank account</th><th class="num">Terms</th></tr></thead><tbody>
-      ${d.vendors.map((v) => `<tr><td>${esc(v.vendor_id)}</td><td><strong>${esc(v.name)}</strong><div class="sub">${esc(v.category)} · ${esc(v.email)}</div></td><td><code>${esc(v.gstin)}</code></td>
-        <td>${v.status === "approved" ? '<span class="chip APPROVED">Approved</span>' : `<span class="chip REJECTED">${esc(v.status)}</span><div class="sub">${esc(v.status_reason)}</div>`}</td>
-        <td>${esc(v.bank_name)}<div class="sub">${esc(v.bank_account)} · ${esc(v.ifsc)}</div></td><td class="num">Net ${v.payment_terms_days}</td></tr>`).join("")}</tbody></table>`;
+    body.innerHTML = d.vendors.length ? `<table class="grid"><thead><tr><th>ID</th><th>Vendor</th><th>GSTIN</th><th>Status</th><th>Verified bank account</th><th class="num">Terms</th><th style="width:72px"></th></tr></thead><tbody>
+      ${d.vendors.map((v) => `<tr><td><strong>${esc(v.vendor_id)}</strong></td><td><strong>${esc(v.name)}</strong><div class="sub">${esc(v.category || "—")} · ${esc(v.email || "—")}</div></td><td><code>${esc(v.gstin || "—")}</code></td>
+        <td>${v.status === "approved" ? '<span class="chip APPROVED">Approved</span>' : `<span class="chip REJECTED">${esc(v.status)}</span><div class="sub">${esc(v.status_reason || "")}</div>`}</td>
+        <td>${esc(v.bank_name || "—")}<div class="sub">${esc(v.bank_account || "—")} · ${esc(v.ifsc || "—")}</div></td><td class="num">Net ${v.payment_terms_days}</td>
+        <td class="nw table-actions" onclick="event.stopPropagation()">
+          <button class="btn-icon-edit" title="Edit Vendor" data-edit-vend="${esc(v.vendor_id)}">${I.edit}</button>
+          <button class="btn-icon-del" title="Delete Vendor" data-del-vend="${esc(v.vendor_id)}">${I.trash}</button>
+        </td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">No vendors found. Click "+ Add vendor" to register a vendor.</div>`;
+
+    $$("[data-edit-vend]").forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const v = d.vendors.find((item) => item.vendor_id === b.dataset.editVend);
+        if (v) openVendorModal(v);
+      };
+    });
+
+    $$("[data-del-vend]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const vid = b.dataset.delVend;
+        if (!confirm(`Delete vendor ${vid}?`)) return;
+        try {
+          await api(`/api/procurement/vendors/${encodeURIComponent(vid)}`, { method: "DELETE" });
+          toast(`Deleted vendor ${vid}`);
+          renderData();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
+
   } else if (dataTab === "grns") {
-    body.innerHTML = `<table class="grid"><thead><tr><th>GRN</th><th>PO</th><th class="num">Line</th><th class="num">Qty received</th><th>Date</th><th>Received by</th></tr></thead><tbody>
-      ${d.grns.map((g) => `<tr><td>${esc(g.grn_number)}</td><td>${esc(g.po_number)}</td><td class="num">${g.line_no}</td><td class="num">${g.qty_received}</td><td>${esc(g.received_date)}</td><td>${esc(g.received_by)}</td></tr>`).join("")}</tbody></table>`;
+    body.innerHTML = d.grns.length ? `<table class="grid"><thead><tr><th>GRN</th><th>PO</th><th class="num">Line</th><th class="num">Qty received</th><th>Date</th><th>Received by</th><th style="width:72px"></th></tr></thead><tbody>
+      ${d.grns.map((g) => `<tr><td><strong>${esc(g.grn_number)}</strong></td><td>${esc(g.po_number)}</td><td class="num">${g.line_no}</td><td class="num">${g.qty_received}</td><td>${esc(g.received_date || "—")}</td><td>${esc(g.received_by || "—")}</td>
+        <td class="nw table-actions" onclick="event.stopPropagation()">
+          <button class="btn-icon-edit" title="Edit GRN" data-edit-grn="${g.id}">${I.edit}</button>
+          <button class="btn-icon-del" title="Delete GRN" data-del-grn="${g.id}">${I.trash}</button>
+        </td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">No goods receipts found. Click "+ Add goods receipt" to record a delivery.</div>`;
+
+    $$("[data-edit-grn]").forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const g = d.grns.find((item) => String(item.id) === String(b.dataset.editGrn));
+        if (g) openGrnModal(g, d.pos);
+      };
+    });
+
+    $$("[data-del-grn]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const gid = b.dataset.delGrn;
+        if (!confirm(`Delete this goods receipt record?`)) return;
+        try {
+          await api(`/api/procurement/grns/${gid}`, { method: "DELETE" });
+          toast("Deleted goods receipt");
+          renderData();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
+
   } else {
-    body.innerHTML = `<table class="grid"><thead><tr><th>Invoice</th><th>Vendor</th><th>Date</th><th>PO</th><th class="num">Taxable</th><th class="num">Gross</th><th>Status</th><th>Source</th></tr></thead><tbody>
-      ${d.ledger.map((l) => `<tr><td><strong>${esc(l.invoice_number || "—")}</strong></td><td>${esc(vmap[l.vendor_id] || l.vendor_id)}</td><td>${esc(l.invoice_date)}</td><td>${esc(l.po_number || "—")}</td>
+    body.innerHTML = d.ledger.length ? `<table class="grid"><thead><tr><th>Invoice</th><th>Vendor</th><th>Date</th><th>PO</th><th class="num">Taxable</th><th class="num">Gross</th><th>Status</th><th>Source</th><th style="width:72px"></th></tr></thead><tbody>
+      ${d.ledger.map((l) => `<tr><td><strong>${esc(l.invoice_number || "—")}</strong></td><td>${esc(vmap[l.vendor_id] || l.vendor_id)}</td><td>${esc(l.invoice_date || "—")}</td><td>${esc(l.po_number || "—")}</td>
         <td class="num">${inr(l.net_amount)}</td><td class="num">${inr(l.gross_amount)}</td><td><span class="chip ${l.status === "approved" || l.status === "paid" ? "APPROVED" : l.status === "in_review" ? "NEEDS_REVIEW" : "REJECTED"}">${esc(l.status.replace("_", " "))}</span></td>
-        <td>${l.run_id ? `<a href="#/run/${esc(l.run_id)}">this system</a>` : "history"}</td></tr>`).join("")}</tbody></table>`;
+        <td>${l.run_id ? `<a href="#/run/${esc(l.run_id)}">this system</a>` : "history"}</td>
+        <td class="nw table-actions" onclick="event.stopPropagation()">
+          <button class="btn-icon-edit" title="Edit Ledger Entry" data-edit-led="${l.id}">${I.edit}</button>
+          <button class="btn-icon-del" title="Delete Ledger Entry" data-del-led="${l.id}">${I.trash}</button>
+        </td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty">No invoices in AP ledger. Click "+ Add ledger invoice" to record one.</div>`;
+
+    $$("[data-edit-led]").forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const l = d.ledger.find((item) => String(item.id) === String(b.dataset.editLed));
+        if (l) openLedgerModal(l, d.vendors, d.pos);
+      };
+    });
+
+    $$("[data-del-led]").forEach((b) => {
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const lid = b.dataset.delLed;
+        if (!confirm(`Delete ledger entry?`)) return;
+        try {
+          await api(`/api/procurement/ledger/${lid}`, { method: "DELETE" });
+          toast("Deleted ledger entry");
+          renderData();
+        } catch (err) { toast(err.message, true); }
+      };
+    });
   }
 }
 
