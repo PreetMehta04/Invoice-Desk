@@ -940,7 +940,8 @@ function showAppShell() {
 (async function boot() {
   try {
     CONFIG = await api("/api/config");
-    $("#engine-badge").innerHTML = `<span class="engine-dot ${CONFIG.ai_enabled ? "" : "local"}"></span>Extraction engine<strong>${esc(CONFIG.engine)}</strong>`;
+    const eb = $("#engine-badge");
+    if (eb) eb.innerHTML = `<span class="engine-dot ${CONFIG.ai_enabled ? "" : "local"}"></span>Extraction engine<strong>${esc(CONFIG.engine)}</strong>`;
   } catch (e) {
     console.error("Config load error:", e);
   }

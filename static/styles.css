@@ -330,7 +330,7 @@ table.grid { width: 100%; border-collapse: collapse; }
 .auth-demo-btn:hover { background: var(--carbon-soft); }
 
 /* ---------- user badge in sidebar */
-.user-badge { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px; background: var(--rule-2); border-radius: var(--radius-sm); margin-top: auto; }
+.user-badge { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; background: var(--rule-2); border: 1px solid var(--rule); border-radius: var(--radius-sm); margin-top: auto; }
 .user-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .user-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--carbon); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; text-transform: uppercase; }
 .user-meta { min-width: 0; display: flex; flex-direction: column; }
